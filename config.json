@@ -1,0 +1,54 @@
+{
+  "hotkeys": {
+    "toggle": {
+      "modifiers": [
+        "ctrl"
+      ],
+      "key": "l"
+    },
+    "search": {
+      "modifiers": [
+        "alt"
+      ],
+      "key": "f"
+    },
+    "scroll_up": {
+      "modifiers": [
+        "alt"
+      ],
+      "key": "up"
+    },
+    "scroll_down": {
+      "modifiers": [
+        "alt"
+      ],
+      "key": "down"
+    },
+    "prev_law": {
+      "modifiers": [
+        "alt"
+      ],
+      "key": "left"
+    },
+    "next_law": {
+      "modifiers": [
+        "alt"
+      ],
+      "key": "right"
+    }
+  },
+  "window": {
+    "width": 1300,
+    "height": 760,
+    "opacity": 0.97
+  },
+  "close_on_original_click": false,
+  "hotkey": {
+    "modifiers": [
+      "ctrl",
+      "shift"
+    ],
+    "key": "l"
+  },
+  "scroll_speed": 100
+}
