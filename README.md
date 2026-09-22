@@ -36,9 +36,10 @@ and:
 The URL for "Open original" comes from `index.csv`.
 
 AI settings are available through the gear button. Select `OpenAI-compatible`,
-enter the API key, choose a model from the list (or type a custom model), and
-save. The default endpoint is `https://api.openai.com/v1`. NVIDIA and other
-OpenAI-compatible services can be used by changing `Base URL` and the model.
+choose a model from the list (or type a custom model), and save. API credentials
+are stored in `.env`, not in `config.json`. Copy `.env.example` to `.env` for
+manual setup. The default endpoint is `https://api.openai.com/v1`. NVIDIA and
+other OpenAI-compatible services can be used by changing `Base URL` and model.
 
 To change the hotkey:
     tray -> Hotkey

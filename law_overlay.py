@@ -7,6 +7,7 @@ import ctypes
 from ctypes import wintypes
 import html
 import json
+import os
 import re
 import sys
 import threading
@@ -14,6 +15,8 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
+
+from dotenv import dotenv_values, load_dotenv, set_key
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtGui import QAction, QFont, QKeySequence, QShortcut, QTextDocument, QColor, QTextCursor
@@ -44,6 +47,7 @@ BASE_DIR = Path(__file__).resolve().parent
 LAWS_DIR = BASE_DIR / "laws"
 INDEX_FILE = LAWS_DIR / "index.csv"
 CONFIG_FILE = BASE_DIR / "config.json"
+ENV_FILE = BASE_DIR / ".env"
 
 DEFAULT_CONFIG = {
     "hotkeys": {
@@ -56,7 +60,6 @@ DEFAULT_CONFIG = {
     },
     "window": {"width": 1180, "height": 760, "opacity": 0.97},
     "close_on_original_click": False,
-    "ai_api_key": "",
     "ai_provider": "openai",
     "ai_base_url": "https://api.openai.com/v1",
     "ai_model": "gpt-4o-mini",
@@ -74,16 +77,13 @@ class Law:
 
 
 def load_config() -> dict:
-    if not CONFIG_FILE.exists():
-        CONFIG_FILE.write_text(
-            json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return json.loads(json.dumps(DEFAULT_CONFIG))
-
-    try:
-        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    load_dotenv(ENV_FILE, override=False)
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    else:
         data = {}
 
     merged = json.loads(json.dumps(DEFAULT_CONFIG))
@@ -92,8 +92,25 @@ def load_config() -> dict:
             merged[section].update(values)
         else:
             merged[section] = values
-    if "ai_provider" not in data and data.get("ai_api_key"):
+    legacy_api_key = data.pop("ai_api_key", "")
+    env_values = dotenv_values(ENV_FILE)
+    if legacy_api_key and not env_values.get("AI_API_KEY"):
+        set_key(str(ENV_FILE), "AI_API_KEY", legacy_api_key)
+        os.environ["AI_API_KEY"] = legacy_api_key
+        env_values["AI_API_KEY"] = legacy_api_key
+    if "ai_provider" not in data and legacy_api_key:
         merged["ai_provider"] = "gemini"
+    merged["ai_api_key"] = os.getenv("AI_API_KEY", env_values.get("AI_API_KEY", ""))
+    merged["ai_provider"] = os.getenv("AI_PROVIDER", merged.get("ai_provider", "gemini"))
+    merged["ai_base_url"] = os.getenv("AI_BASE_URL", merged.get("ai_base_url", ""))
+    merged["ai_model"] = os.getenv("AI_MODEL", merged.get("ai_model", ""))
+    config_to_save = dict(merged)
+    config_to_save.pop("ai_api_key", None)
+    if legacy_api_key or not CONFIG_FILE.exists():
+        CONFIG_FILE.write_text(
+            json.dumps(config_to_save, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     return merged
 
 
@@ -577,13 +594,24 @@ class SettingsDialog(QDialog):
       self.config.setdefault("window", {})["width"] = w
       self.config.setdefault("window", {})["height"] = h
       self.config["scroll_speed"] = spd
-      self.config["ai_api_key"] = self.api_key_input.text().strip()
       self.config["ai_provider"] = provider
       self.config["ai_base_url"] = base_url
       self.config["ai_model"] = model
 
+      env_values = {
+          "AI_API_KEY": self.api_key_input.text().strip(),
+          "AI_PROVIDER": provider,
+          "AI_BASE_URL": base_url,
+          "AI_MODEL": model,
+      }
+      for key, value in env_values.items():
+          set_key(str(ENV_FILE), key, value)
+          os.environ[key] = value
+
+      config_to_save = dict(self.config)
+      config_to_save.pop("ai_api_key", None)
       CONFIG_FILE.write_text(
-          json.dumps(self.config, ensure_ascii=False, indent=2),
+          json.dumps(config_to_save, ensure_ascii=False, indent=2),
           encoding="utf-8",
       )
       self.saved.emit(self.config)

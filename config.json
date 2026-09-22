@@ -1,5 +1,4 @@
 {
-  "ai_api_key": "[REDACTED]",
   "ai_base_url": "https://openrouter.ai/api/v1",
   "ai_model": "openrouter/free",
   "ai_provider": "openai",

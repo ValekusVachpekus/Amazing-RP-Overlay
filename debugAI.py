@@ -1,10 +1,14 @@
 import urllib.request
 import urllib.error
 import json
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "config.json"
+ENV_FILE = BASE_DIR / ".env"
+load_dotenv(ENV_FILE)
 def test_gemini_connection():
     print("=== Диагностика подключения к Google API ===")
     
@@ -20,7 +24,7 @@ def test_gemini_connection():
         print(f"❌ Ошибка чтения config.json: {e}")
         return
 
-    api_key = config.get("ai_api_key", "").strip()
+    api_key = os.getenv("AI_API_KEY", "").strip()
     if not api_key:
         print("❌ Ошибка: Поле 'ai_api_key' пустое. Укажи ключ в настройках оверлея.")
         return
