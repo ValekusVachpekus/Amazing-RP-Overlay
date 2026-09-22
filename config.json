@@ -1,4 +1,16 @@
 {
+  "ai_api_key": "[REDACTED]",
+  "ai_base_url": "https://openrouter.ai/api/v1",
+  "ai_model": "openrouter/free",
+  "ai_provider": "openai",
+  "close_on_original_click": false,
+  "hotkey": {
+    "key": "l",
+    "modifiers": [
+      "ctrl",
+      "shift"
+    ]
+  },
   "hotkeys": {
     "toggle": {
       "modifiers": [
@@ -37,19 +49,10 @@
       "key": "right"
     }
   },
+  "scroll_speed": 100,
   "window": {
-    "width": 1300,
     "height": 760,
-    "opacity": 0.97
-  },
-  "close_on_original_click": false,
-  "ai_api_key": "[REDACTED]",
-  "hotkey": {
-    "modifiers": [
-      "ctrl",
-      "shift"
-    ],
-    "key": "l"
-  },
-  "scroll_speed": 100
+    "opacity": 0.97,
+    "width": 1300
+  }
 }

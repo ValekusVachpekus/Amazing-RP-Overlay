@@ -5,6 +5,7 @@ import urllib.error
 import csv
 import ctypes
 from ctypes import wintypes
+import html
 import json
 import re
 import sys
@@ -56,6 +57,9 @@ DEFAULT_CONFIG = {
     "window": {"width": 1180, "height": 760, "opacity": 0.97},
     "close_on_original_click": False,
     "ai_api_key": "",
+    "ai_provider": "openai",
+    "ai_base_url": "https://api.openai.com/v1",
+    "ai_model": "gpt-4o-mini",
 }
 
 
@@ -88,6 +92,8 @@ def load_config() -> dict:
             merged[section].update(values)
         else:
             merged[section] = values
+    if "ai_provider" not in data and data.get("ai_api_key"):
+        merged["ai_provider"] = "gemini"
     return merged
 
 
@@ -189,6 +195,86 @@ def text_to_html(text: str, search_terms: list[str] = None) -> str:
         else:
             out.append(f"<div class='law-line'>{esc}</div>")
 
+    return "\n".join(out)
+
+
+def ai_markdown_to_html(text: str) -> str:
+    """Render the safe Markdown subset commonly returned by chat models."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    out = []
+    in_code = False
+    code_lines = []
+    list_type = None
+
+    def close_list():
+        nonlocal list_type
+        if list_type:
+            out.append(f"</{list_type}>")
+            list_type = None
+
+    def inline_markup(value: str) -> str:
+        escaped = html.escape(value, quote=False)
+        code_parts = []
+
+        def save_code(match):
+            code_parts.append(f"<code>{match.group(1)}</code>")
+            return f"\x00{len(code_parts) - 1}\x00"
+
+        escaped = re.sub(r"`([^`\n]+)`", save_code, escaped)
+        escaped = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: f"<strong>{m.group(1) or m.group(2)}</strong>", escaped)
+        escaped = re.sub(r"~~(.+?)~~", r"<del>\1</del>", escaped)
+        escaped = re.sub(r"(?<!\w)(\*|_)([^\n]+?)\1(?!\w)", r"<em>\2</em>", escaped)
+        for index, code in enumerate(code_parts):
+            escaped = escaped.replace(f"\x00{index}\x00", code)
+        return escaped
+
+    for line in lines:
+        if line.strip().startswith("```"):
+            if in_code:
+                out.append(f"<pre><code>{html.escape(chr(10).join(code_lines), quote=False)}</code></pre>")
+                code_lines = []
+                in_code = False
+            else:
+                close_list()
+                in_code = True
+            continue
+
+        if in_code:
+            code_lines.append(line)
+            continue
+
+        stripped = line.strip()
+        if not stripped:
+            close_list()
+            continue
+
+        heading = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        bullet = re.match(r"^[-*+]\s+(.+)$", stripped)
+        ordered = re.match(r"^\d+[.)]\s+(.+)$", stripped)
+        quote = re.match(r"^>\s?(.*)$", stripped)
+
+        if heading:
+            close_list()
+            level = len(heading.group(1)) + 1
+            out.append(f"<h{level}>{inline_markup(heading.group(2))}</h{level}>")
+        elif bullet or ordered:
+            current_type = "ul" if bullet else "ol"
+            if list_type != current_type:
+                close_list()
+                list_type = current_type
+                out.append(f"<{list_type}>")
+            item_text = bullet.group(1) if bullet else ordered.group(1)
+            out.append(f"<li>{inline_markup(item_text)}</li>")
+        else:
+            close_list()
+            if quote:
+                out.append(f"<blockquote>{inline_markup(quote.group(1))}</blockquote>")
+            else:
+                out.append(f"<p>{inline_markup(stripped)}</p>")
+
+    if in_code:
+        out.append(f"<pre><code>{html.escape(chr(10).join(code_lines), quote=False)}</code></pre>")
+    close_list()
     return "\n".join(out)
 
 
@@ -328,7 +414,7 @@ class SettingsDialog(QDialog):
       super().__init__(parent)
       self.config = json.loads(json.dumps(config))
       self.setWindowTitle("Настройки оверлея")
-      self.resize(500, 480)
+      self.resize(560, 560)
 
       self.setStyleSheet("""
         QDialog { background: #17191d; }
@@ -409,9 +495,39 @@ class SettingsDialog(QDialog):
 
       # ИИшка
       self.api_key_input = QLineEdit(self.config.get("ai_api_key", ""))
-      self.api_key_input.setPlaceholderText("AI Studio / Gemini API Key")
+      self.api_key_input.setPlaceholderText("API-ключ провайдера")
       self.api_key_input.setEchoMode(QLineEdit.PasswordEchoOnEdit)
-      form.addRow("API Ключ ИИ:", self.api_key_input)
+      self.provider_input = QComboBox()
+      self.provider_input.addItem("Gemini", "gemini")
+      self.provider_input.addItem("OpenAI-compatible / NVIDIA", "openai")
+      provider = self.config.get("ai_provider", "gemini")
+      provider_index = self.provider_input.findData(provider)
+      self.provider_input.setCurrentIndex(max(0, provider_index))
+
+      self.base_url_input = QLineEdit(
+          self.config.get("ai_base_url", DEFAULT_CONFIG["ai_base_url"])
+      )
+      self.base_url_input.setPlaceholderText("https://api.example.com/v1")
+      self.model_input = QComboBox()
+      self.model_input.setEditable(True)
+      self.model_input.addItems([
+          "gpt-4o-mini",
+          "gpt-4o",
+          "gpt-4.1-mini",
+          "gpt-4.1",
+          "o3-mini",
+      ])
+      self.model_input.setCurrentText(
+          self.config.get("ai_model", DEFAULT_CONFIG["ai_model"])
+      )
+      self.model_input.setToolTip(
+          "Выберите модель OpenAI или введите название модели совместимого провайдера"
+      )
+
+      form.addRow("Провайдер ИИ:", self.provider_input)
+      form.addRow("API ключ ИИ:", self.api_key_input)
+      form.addRow("Base URL:", self.base_url_input)
+      form.addRow("Модель:", self.model_input)
 
       buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
       buttons.accepted.connect(self.save_config)
@@ -442,13 +558,34 @@ class SettingsDialog(QDialog):
           QMessageBox.warning(self, "Ошибка", "Размеры и скорость должны быть числами!")
           return
 
+      if not 640 <= w <= 5000 or not 400 <= h <= 3000 or not 10 <= spd <= 2000:
+          QMessageBox.warning(
+              self,
+              "Ошибка",
+              "Допустимые значения: ширина 640-5000, высота 400-3000, скорость 10-2000.",
+          )
+          return
+
+      provider = self.provider_input.currentData()
+      base_url = self.base_url_input.text().strip().rstrip("/")
+      model = self.model_input.currentText().strip()
+      if provider == "openai" and (not base_url or not model):
+          QMessageBox.warning(self, "Ошибка", "Для OpenAI нужны Base URL и модель.")
+          return
+
       self.config["hotkeys"] = new_hotkeys
       self.config.setdefault("window", {})["width"] = w
       self.config.setdefault("window", {})["height"] = h
       self.config["scroll_speed"] = spd
       self.config["ai_api_key"] = self.api_key_input.text().strip()
+      self.config["ai_provider"] = provider
+      self.config["ai_base_url"] = base_url
+      self.config["ai_model"] = model
 
-      CONFIG_FILE.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
+      CONFIG_FILE.write_text(
+          json.dumps(self.config, ensure_ascii=False, indent=2),
+          encoding="utf-8",
+      )
       self.saved.emit(self.config)
       self.accept()
 
@@ -464,6 +601,7 @@ class OverlayWindow(QMainWindow):
         # Теперь храним кортежи: (Объект Law, количество совпадений)
         self.filtered = [(law, 0) for law in laws] 
         self.current_law = None
+        self.is_click_through = True
 
         self.setWindowTitle("Законодательство")
         self.setWindowFlags(
@@ -479,6 +617,32 @@ class OverlayWindow(QMainWindow):
         )
 
         self.build_ui()
+
+    def set_click_through(self, enabled: bool):
+        """Переключает прохождение кликов сквозь окно на Windows."""
+        if sys.platform != "win32" or not self.winId():
+            self.is_click_through = enabled
+            return
+
+        hwnd = int(self.winId())
+        user32 = ctypes.windll.user32
+        get_style = user32.GetWindowLongW
+        set_style = user32.SetWindowLongW
+        get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        get_style.restype = ctypes.c_long
+        set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+        set_style.restype = ctypes.c_long
+
+        ex_style = get_style(hwnd, -20)
+        if enabled:
+            ex_style |= 0x20
+        else:
+            ex_style &= ~0x20
+        ex_style |= 0x80000
+        set_style(hwnd, -20, ex_style)
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020)
+        self.is_click_through = enabled
+        self.status.setText("Только просмотр" if enabled else "Интерактивный режим")
 
     def build_ui(self):
         root = QWidget()
@@ -583,9 +747,6 @@ class OverlayWindow(QMainWindow):
         header.addWidget(self.original)
         right_l.addLayout(header)
 
-        header.addWidget(self.original)
-        right_l.addLayout(header)
-
         self.reader = QTextBrowser()
         self.reader.setOpenLinks(False)
         self.reader.anchorClicked.connect(
@@ -610,7 +771,32 @@ class OverlayWindow(QMainWindow):
         chat_l.addWidget(chat_title)
 
         self.chat_history = QTextBrowser()
-        self.chat_history.setHtml("<div style='color:#9ca3af'>Чат готов. ИИ видит открытый сейчас закон.</div>")
+        self.chat_history.setHtml("""
+            <style>
+                p { margin: 5px 0; color: #e5e7eb; }
+                h2, h3, h4 { color: #fbbf24; margin: 10px 0 5px; }
+                ul, ol { margin: 4px 0 6px 18px; color: #e5e7eb; }
+                li { margin: 2px 0; }
+                blockquote {
+                    margin: 6px 0;
+                    padding-left: 10px;
+                    border-left: 3px solid #6b7280;
+                    color: #cbd5e1;
+                }
+                code {
+                    background: #24272e;
+                    color: #fbbf24;
+                    padding: 1px 4px;
+                }
+                pre {
+                    background: #0b0d10;
+                    border: 1px solid #34373f;
+                    padding: 8px;
+                    white-space: pre-wrap;
+                }
+            </style>
+            <div style='color:#9ca3af'>Чат готов. ИИ видит открытый сейчас закон.</div>
+        """)
         chat_l.addWidget(self.chat_history, 1)
 
         from PySide6.QtWidgets import QCheckBox
@@ -687,6 +873,7 @@ class OverlayWindow(QMainWindow):
         """)
 
         self.populate()
+        self.set_click_through(True)
 
         self.esc = QShortcut(QKeySequence("Esc"), self)
         self.esc.activated.connect(self.hide)
@@ -817,22 +1004,15 @@ class OverlayWindow(QMainWindow):
 
     def reload_laws(self):
         self.laws = load_laws()
-        self.filtered = list(self.laws)
+        self.filtered = [(law, 0) for law in self.laws]
         self.populate()
         self.want_reindex.emit()
 
     def show_centered(self):
-        screen = QApplication.primaryScreen()
-        if screen:
-            g = screen.availableGeometry()
-            self.move(
-                g.center().x() - self.width() // 2,
-                g.center().y() - self.height() // 2,
-            )
+        self.center_on_screen()
         self.show()
         self.raise_()
-        # self.activateWindow()
-        # self.search.setFocus()
+        self.set_click_through(True)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -853,21 +1033,42 @@ class OverlayWindow(QMainWindow):
         self.list.setCurrentRow(new_idx)
 
     def focus_search(self):
-        self.activateWindow() # Принудительный перехват фокуса
+        if not self.isVisible():
+            self.show_centered()
+            self.set_click_through(False)
+        elif not self.is_click_through:
+            self.set_click_through(True)
+            return
+        else:
+            self.set_click_through(False)
+        self.show()
+        self.raise_()
+        self.activateWindow()
         self.search.setFocus()
         self.search.selectAll()
 
     def toggle_chat(self):
-      is_hidden = self.chat_panel.isHidden()
-      self.chat_panel.setVisible(is_hidden)
-      
-      # Плавно увеличиваем или уменьшаем ширину окна на 410 пикселей
-      w = self.width()
-      new_w = w + 410 if is_hidden else w - 410
-      self.resize(new_w, self.height())
-      
-      if is_hidden:
+        is_hidden = self.chat_panel.isHidden()
+        self.chat_panel.setVisible(is_hidden)
+
+        base_width = int(self.config.get("window", {}).get("width", 1180))
+        target_width = base_width + 410 if is_hidden else base_width
+        self.resize(target_width, self.height())
+        self.center_on_screen()
+
+        if is_hidden and not self.is_click_through:
             self.chat_input.setFocus()
+
+    def center_on_screen(self):
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen:
+            geometry = screen.availableGeometry()
+            self.move(
+                geometry.center().x() - self.width() // 2,
+                geometry.center().y() - self.height() // 2,
+            )
             
     def send_chat_message(self):
       text = self.chat_input.text().strip()
@@ -891,7 +1092,7 @@ class OverlayWindow(QMainWindow):
           mode_msg = "<i>(ИИ видит только текущий закон)</i>"
 
       # Выводим сообщение пользователя
-      self.chat_history.append(f"<div style='color:#60a5fa; margin-top:8px;'><b>Вы:</b> {text} <br><span style='font-size:10px; color:#9ca3af;'>{mode_msg}</span></div>")
+      self.chat_history.append(f"<div style='color:#60a5fa; margin-top:8px;'><b>Вы:</b> {html.escape(text)} <br><span style='font-size:10px; color:#9ca3af;'>{mode_msg}</span></div>")
       self.chat_input.clear()
       self.chat_input.setEnabled(False)
       self.btn_send.setEnabled(False)
@@ -899,7 +1100,14 @@ class OverlayWindow(QMainWindow):
 
       # Запускаем поток
       api_key = self.config.get("ai_api_key", "")
-      self.ai_worker = AIWorker(api_key, text, context_text)
+      self.ai_worker = AIWorker(
+          api_key=api_key,
+          user_text=text,
+          context_text=context_text,
+          provider=self.config.get("ai_provider", "gemini"),
+          base_url=self.config.get("ai_base_url", DEFAULT_CONFIG["ai_base_url"]),
+          model=self.config.get("ai_model", DEFAULT_CONFIG["ai_model"]),
+      )
       self.ai_worker.response_ready.connect(self.receive_chat_message)
       self.ai_worker.error_occurred.connect(self.receive_chat_error)
       self.ai_worker.start()
@@ -911,8 +1119,11 @@ class OverlayWindow(QMainWindow):
         cursor.select(QTextCursor.BlockUnderCursor)
         cursor.removeSelectedText()
         
-        html_resp = response.replace('\n', '<br>')
-        self.chat_history.append(f"<div style='color:#fbbf24; margin-bottom:10px;'><b>ИИ:</b> {html_resp}</div>")
+        html_resp = ai_markdown_to_html(response)
+        self.chat_history.append(
+            "<div style='color:#fbbf24; margin-bottom:10px;'>"
+            f"<b>ИИ:</b><div class='ai-response'>{html_resp}</div></div>"
+        )
         self.chat_input.setEnabled(True)
         self.btn_send.setEnabled(True)
         self.chat_input.setFocus()
@@ -923,7 +1134,7 @@ class OverlayWindow(QMainWindow):
         cursor.select(QTextCursor.BlockUnderCursor)
         cursor.removeSelectedText()
         
-        self.chat_history.append(f"<div style='color:#f87171; margin-bottom:10px;'><b>Ошибка:</b> {error_text}</div>")
+        self.chat_history.append(f"<div style='color:#f87171; margin-bottom:10px;'><b>Ошибка:</b> {html.escape(error_text)}</div>")
         self.chat_input.setEnabled(True)
         self.btn_send.setEnabled(True)
 
@@ -944,33 +1155,6 @@ class AppController(QObject):
         self.start_hotkey()
         self.reindex()
 
-    def start_hotkey(self):
-      self.active_hotkeys = []
-      cfg = self.config.get("hotkeys", {})
-      
-      base_id = 1000
-      for action, keys in cfg.items():
-          hk = GlobalHotkey(keys["modifiers"], keys["key"], base_id)
-          
-          # Привязываем сигналы в зависимости от действия
-          if action == "toggle":
-              hk.activated.connect(self.toggle)
-          elif action == "scroll_down":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.scroll_text(100))
-          elif action == "scroll_up":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.scroll_text(-100))
-          elif action == "next_law":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.switch_law(1))
-          elif action == "prev_law":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.switch_law(-1))
-          elif action == "search":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.focus_search())
-
-          hk.registration_failed.connect(self.hotkey_failed)
-          hk.start()
-          self.active_hotkeys.append(hk)
-          base_id += 1
-
     def restart_hotkey(self):
       for hk in getattr(self, "active_hotkeys", []):
           try:
@@ -980,19 +1164,11 @@ class AppController(QObject):
       time.sleep(0.1)
       self.start_hotkey()
 
-    def quit(self):
-      for hk in getattr(self, "active_hotkeys", []):
-          try:
-              hk.stop()
-          except Exception:
-              pass
-      self.app.quit()
-
     def apply_hotkey_config(self, config):
-      self.config = config
-      # Применяем новые размеры окна сразу после сохранения
-      self.window.resize(config["window"]["width"], config["window"]["height"])
-      self.restart_hotkey()
+        self.config = config
+        self.window.config = config
+        self.window.resize(config["window"]["width"], config["window"]["height"])
+        self.restart_hotkey()
 
     def start_hotkey(self):
       self.active_hotkeys = []
@@ -1006,20 +1182,34 @@ class AppController(QObject):
           if action == "toggle":
               hk.activated.connect(self.toggle)
           elif action == "scroll_down":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.scroll_text(scroll_spd))
+              hk.activated.connect(
+                  lambda speed=scroll_spd: self.window.isVisible()
+                  and self.window.scroll_text(speed)
+              )
           elif action == "scroll_up":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.scroll_text(-scroll_spd))
+              hk.activated.connect(
+                  lambda speed=scroll_spd: self.window.isVisible()
+                  and self.window.scroll_text(-speed)
+              )
           elif action == "next_law":
               hk.activated.connect(lambda: self.window.isVisible() and self.window.switch_law(1))
           elif action == "prev_law":
               hk.activated.connect(lambda: self.window.isVisible() and self.window.switch_law(-1))
           elif action == "search":
-              hk.activated.connect(lambda: self.window.isVisible() and self.window.focus_search())
+              hk.activated.connect(self.window.focus_search)
 
           hk.registration_failed.connect(self.hotkey_failed)
           hk.start()
           self.active_hotkeys.append(hk)
           base_id += 1
+
+    def quit(self):
+        for hotkey in getattr(self, "active_hotkeys", []):
+            try:
+                hotkey.stop()
+            except Exception:
+                pass
+        self.app.quit()
 
     def hotkey_failed(self, message):
         if self.tray:
@@ -1100,27 +1290,34 @@ class AppController(QObject):
         )
         self.tray.show()
 
-    def quit(self):
-        try:
-            self.hotkey.stop()
-        except Exception:
-            pass
-        self.app.quit()
-
-
 class AIWorker(QThread):
     response_ready = Signal(str)
     error_occurred = Signal(str)
 
-    def __init__(self, api_key: str, user_text: str, context_text: str):
+    def __init__(
+        self,
+        api_key: str,
+        user_text: str,
+        context_text: str,
+        provider: str = "gemini",
+        base_url: str = "",
+        model: str = "",
+    ):
         super().__init__()
         self.api_key = api_key
         self.user_text = user_text
         self.context_text = context_text
+        self.provider = provider
+        self.base_url = base_url
+        self.model = model
 
     def run(self):
         if not self.api_key:
             self.error_occurred.emit("Укажите API-ключ в настройках (значок шестеренки).")
+            return
+
+        if self.provider == "openai":
+            self.run_openai_compatible()
             return
 
         # Официальное название новой быстрой модели на 8 миллиардов параметров
@@ -1158,6 +1355,39 @@ class AIWorker(QThread):
         except Exception as e:
             # Отлов любых других сбоев
             self.error_occurred.emit(f"Сбой: {str(e)}")
+
+    def run_openai_compatible(self):
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            system_message = (
+                "Ты юридический ИИ-помощник. Отвечай кратко, по существу и "
+                "опирайся на предоставленный текст закона. Не выдумывай "
+                "информацию и каждый ответ подтверждай ссылкой на закон, "
+                "номер статьи или пункт."
+            )
+            user_message = (
+                f"Контекст (текст закона):\n{self.context_text[:150000]}\n\n"
+                f"Вопрос пользователя: {self.user_text}"
+            )
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.5,
+                top_p=1,
+                max_tokens=1024,
+                stream=False,
+            )
+            answer = completion.choices[0].message.content
+            if not answer:
+                raise RuntimeError("Провайдер вернул пустой ответ.")
+            self.response_ready.emit(answer)
+        except Exception as exc:
+            self.error_occurred.emit(f"OpenAI API: {exc}")
 
 
 def main():
