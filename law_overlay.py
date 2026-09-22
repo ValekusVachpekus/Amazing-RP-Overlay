@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import urllib.request
+import urllib.error
 import csv
 import ctypes
 from ctypes import wintypes
@@ -13,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
-from PySide6.QtGui import QAction, QFont, QKeySequence, QShortcut, QTextDocument, QColor
+from PySide6.QtGui import QAction, QFont, QKeySequence, QShortcut, QTextDocument, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -53,6 +55,7 @@ DEFAULT_CONFIG = {
     },
     "window": {"width": 1180, "height": 760, "opacity": 0.97},
     "close_on_original_click": False,
+    "ai_api_key": "",
 }
 
 
@@ -404,6 +407,12 @@ class SettingsDialog(QDialog):
       form.addRow("Скорость прокрутки (px):", self.scroll_input)
       layout.addWidget(extra_group)
 
+      # ИИшка
+      self.api_key_input = QLineEdit(self.config.get("ai_api_key", ""))
+      self.api_key_input.setPlaceholderText("AI Studio / Gemini API Key")
+      self.api_key_input.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+      form.addRow("API Ключ ИИ:", self.api_key_input)
+
       buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
       buttons.accepted.connect(self.save_config)
       buttons.rejected.connect(self.reject)
@@ -437,6 +446,7 @@ class SettingsDialog(QDialog):
       self.config.setdefault("window", {})["width"] = w
       self.config.setdefault("window", {})["height"] = h
       self.config["scroll_speed"] = spd
+      self.config["ai_api_key"] = self.api_key_input.text().strip()
 
       CONFIG_FILE.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
       self.saved.emit(self.config)
@@ -489,6 +499,11 @@ class OverlayWindow(QMainWindow):
         self.status = QLabel("Готово")
         self.status.setObjectName("status")
         top.addWidget(self.status)
+
+        self.btn_chat = QPushButton("AI")
+        self.btn_chat.setFixedSize(50, 32)
+        self.btn_chat.clicked.connect(self.toggle_chat)
+        top.addWidget(self.btn_chat)
 
         settings = QPushButton("⚙")
         settings.setFixedSize(36, 32)
@@ -580,7 +595,46 @@ class OverlayWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setSizes([390, 790])
 
-        layout.addWidget(splitter, 1)
+        # Обертка для сплиттера и чата
+        main_h_layout = QHBoxLayout()
+        main_h_layout.addWidget(splitter, 1)
+
+        # --- ПАНЕЛЬ ИИ ЧАТА ---
+        self.chat_panel = QFrame()
+        self.chat_panel.setFixedWidth(400)
+        chat_l = QVBoxLayout(self.chat_panel)
+        chat_l.setContentsMargins(0, 0, 0, 0)
+        
+        chat_title = QLabel("ИИ Помощник")
+        chat_title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        chat_l.addWidget(chat_title)
+
+        self.chat_history = QTextBrowser()
+        self.chat_history.setHtml("<div style='color:#9ca3af'>Чат готов. ИИ видит открытый сейчас закон.</div>")
+        chat_l.addWidget(self.chat_history, 1)
+
+        from PySide6.QtWidgets import QCheckBox
+        self.chk_all_laws = QCheckBox("Анализировать все законы базы")
+        self.chk_all_laws.setStyleSheet("color: #e5e7eb; font-size: 12px; margin-bottom: 4px;")
+        chat_l.addWidget(self.chk_all_laws)
+        # ---------------------------
+
+        chat_input_row = QHBoxLayout()
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("Спроси что-нибудь по закону...")
+        self.chat_input.returnPressed.connect(self.send_chat_message)
+        chat_input_row.addWidget(self.chat_input, 1)
+
+        self.btn_send = QPushButton("➤")
+        self.btn_send.setFixedSize(36, 36)
+        self.btn_send.clicked.connect(self.send_chat_message)
+        chat_input_row.addWidget(self.btn_send)
+
+        chat_l.addLayout(chat_input_row)
+        self.chat_panel.hide() # Скрыт по умолчанию
+
+        main_h_layout.addWidget(self.chat_panel)
+        layout.addLayout(main_h_layout, 1)
 
         self.setStyleSheet("""
         QWidget#root { background:#17191d; border:1px solid #3a3d44; }
@@ -731,9 +785,8 @@ class OverlayWindow(QMainWindow):
         
         found = self.reader.find(terms[0])
         if not found:
-            # Если дошли до конца, перематываем в начало и ищем снова
             cursor = self.reader.textCursor()
-            cursor.movePosition(cursor.Start)
+            cursor.movePosition(QTextCursor.Start)
             self.reader.setTextCursor(cursor)
             self.reader.find(terms[0])
 
@@ -743,14 +796,13 @@ class OverlayWindow(QMainWindow):
         terms = [x for x in re.split(r"\s+", query) if x]
         if not terms: return
         
-        # Используем правильный системный флаг QTextDocument.FindBackward
         found = self.reader.find(terms[0], QTextDocument.FindBackward)
         if not found:
-            # Перематываем в конец, если дошли до начала документа
             cursor = self.reader.textCursor()
-            cursor.movePosition(cursor.End)
+            cursor.movePosition(QTextCursor.End)
             self.reader.setTextCursor(cursor)
             self.reader.find(terms[0], QTextDocument.FindBackward)
+
 
     def open_original(self):
         if self.current_law and self.current_law.url:
@@ -804,6 +856,76 @@ class OverlayWindow(QMainWindow):
         self.activateWindow() # Принудительный перехват фокуса
         self.search.setFocus()
         self.search.selectAll()
+
+    def toggle_chat(self):
+      is_hidden = self.chat_panel.isHidden()
+      self.chat_panel.setVisible(is_hidden)
+      
+      # Плавно увеличиваем или уменьшаем ширину окна на 410 пикселей
+      w = self.width()
+      new_w = w + 410 if is_hidden else w - 410
+      self.resize(new_w, self.height())
+      
+      if is_hidden:
+            self.chat_input.setFocus()
+            
+    def send_chat_message(self):
+      text = self.chat_input.text().strip()
+      if not text: return
+
+      # Читаем контекст в зависимости от состояния чекбокса
+      context_text = ""
+      if self.chk_all_laws.isChecked():
+          # Собираем текст абсолютно со всех файлов законов
+          all_texts = []
+          for law in self.laws:
+              law_content = read_text_file(LAWS_DIR / law.filename)
+              if law_content:
+                  all_texts.append(f"=== {law.title} ===\n{law_content}")
+          context_text = "\n\n".join(all_texts)
+          mode_msg = "<i>(ИИ анализирует всю базу законов)</i>"
+      else:
+          # Только текущий закон
+          if self.current_law:
+              context_text = read_text_file(LAWS_DIR / self.current_law.filename)
+          mode_msg = "<i>(ИИ видит только текущий закон)</i>"
+
+      # Выводим сообщение пользователя
+      self.chat_history.append(f"<div style='color:#60a5fa; margin-top:8px;'><b>Вы:</b> {text} <br><span style='font-size:10px; color:#9ca3af;'>{mode_msg}</span></div>")
+      self.chat_input.clear()
+      self.chat_input.setEnabled(False)
+      self.btn_send.setEnabled(False)
+      self.chat_history.append("<div style='color:#9ca3af;'><i>ИИ думает...</i></div>")
+
+      # Запускаем поток
+      api_key = self.config.get("ai_api_key", "")
+      self.ai_worker = AIWorker(api_key, text, context_text)
+      self.ai_worker.response_ready.connect(self.receive_chat_message)
+      self.ai_worker.error_occurred.connect(self.receive_chat_error)
+      self.ai_worker.start()
+
+
+    def receive_chat_message(self, response):
+        cursor = self.chat_history.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.select(QTextCursor.BlockUnderCursor)
+        cursor.removeSelectedText()
+        
+        html_resp = response.replace('\n', '<br>')
+        self.chat_history.append(f"<div style='color:#fbbf24; margin-bottom:10px;'><b>ИИ:</b> {html_resp}</div>")
+        self.chat_input.setEnabled(True)
+        self.btn_send.setEnabled(True)
+        self.chat_input.setFocus()
+
+    def receive_chat_error(self, error_text):
+        cursor = self.chat_history.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.select(QTextCursor.BlockUnderCursor)
+        cursor.removeSelectedText()
+        
+        self.chat_history.append(f"<div style='color:#f87171; margin-bottom:10px;'><b>Ошибка:</b> {error_text}</div>")
+        self.chat_input.setEnabled(True)
+        self.btn_send.setEnabled(True)
 
 
 class AppController(QObject):
@@ -984,6 +1106,58 @@ class AppController(QObject):
         except Exception:
             pass
         self.app.quit()
+
+
+class AIWorker(QThread):
+    response_ready = Signal(str)
+    error_occurred = Signal(str)
+
+    def __init__(self, api_key: str, user_text: str, context_text: str):
+        super().__init__()
+        self.api_key = api_key
+        self.user_text = user_text
+        self.context_text = context_text
+
+    def run(self):
+        if not self.api_key:
+            self.error_occurred.emit("Укажите API-ключ в настройках (значок шестеренки).")
+            return
+
+        # Официальное название новой быстрой модели на 8 миллиардов параметров
+        model = "gemini-3.5-flash-lite"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        
+        prompt = f"Контекст (текст закона):\n{self.context_text[:150000]}\n\nВопрос пользователя: {self.user_text}"
+        
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "systemInstruction": {"parts": [{"text": "Ты юридический ИИ-помощник. Отвечай кратко, по существу и опирайся на предоставленный текст закона. При формировании ответа избегай выдумок и не добавляй информацию, которой нет в тексте закона. Каждый ответ подвержай ссылкой на источник (закон, номер статьи, пункт)."}],},
+        }
+        
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+        
+        try:
+            with urllib.request.urlopen(req, timeout=12) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                answer = result['candidates'][0]['content']['parts'][0]['text']
+                self.response_ready.emit(answer)
+                
+        except urllib.error.HTTPError as e:
+            try:
+                err_msg = json.loads(e.read().decode('utf-8'))['error']['message']
+            except Exception:
+                err_msg = str(e)
+            # Выводим точную ошибку от Google (например, 400 API key not valid)
+            self.error_occurred.emit(f"API ({e.code}): {err_msg}")
+            
+        except urllib.error.URLError as e:
+            # Выводим системную ошибку сети (как в тестовом файле)
+            self.error_occurred.emit(f"Сеть: {e.reason}")
+            
+        except Exception as e:
+            # Отлов любых других сбоев
+            self.error_occurred.emit(f"Сбой: {str(e)}")
 
 
 def main():

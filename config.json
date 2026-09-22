@@ -43,6 +43,7 @@
     "opacity": 0.97
   },
   "close_on_original_click": false,
+  "ai_api_key": "[REDACTED]",
   "hotkey": {
     "modifiers": [
       "ctrl",
