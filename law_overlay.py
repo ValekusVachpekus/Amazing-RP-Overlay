@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv, set_key
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer, QPoint
 from PySide6.QtGui import QAction, QFont, QKeySequence, QShortcut, QTextDocument, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QMenu,
     QSplitter,
+    QSizeGrip,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -630,6 +631,14 @@ class OverlayWindow(QMainWindow):
         self.filtered = [(law, 0) for law in laws] 
         self.current_law = None
         self.is_click_through = True
+        # Состояние между свернуть/развернуть (не между перезапусками)
+        self._saved_law_filename: str | None = None
+        self._saved_scroll: int = 0
+        self._restoring_state: bool = False
+        self._first_show: bool = True
+        # Drag за шапку (только в фокусе)
+        self._drag_offset: QPoint | None = None
+        self._size_grip: QSizeGrip | None = None
 
         self.setWindowTitle("Законодательство")
         self.setWindowFlags(
@@ -643,6 +652,7 @@ class OverlayWindow(QMainWindow):
             int(config["window"].get("width", 1180)),
             int(config["window"].get("height", 760)),
         )
+        self.setMinimumSize(640, 400)
 
         self.build_ui()
 
@@ -650,6 +660,11 @@ class OverlayWindow(QMainWindow):
         """Переключает прохождение кликов сквозь окно на Windows."""
         if sys.platform != "win32" or not self.winId():
             self.is_click_through = enabled
+            if hasattr(self, "status") and self.status is not None:
+                self.status.setText("Только просмотр" if enabled else "Интерактивный режим")
+            if getattr(self, "_size_grip", None) is not None:
+                self._size_grip.setVisible(not enabled)
+            self._drag_offset = None
             return
 
         hwnd = int(self.winId())
@@ -671,6 +686,10 @@ class OverlayWindow(QMainWindow):
         user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020)
         self.is_click_through = enabled
         self.status.setText("Только просмотр" if enabled else "Интерактивный режим")
+        # В click-through клики идут в игру, grip и drag не нужны
+        if self._size_grip is not None:
+            self._size_grip.setVisible(not enabled)
+        self._drag_offset = None
 
     def build_ui(self):
         root = QWidget()
@@ -681,8 +700,12 @@ class OverlayWindow(QMainWindow):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        top = QHBoxLayout()
-        title = QLabel("ЗАКОНОДАТЕЛЬСТВО")
+        self.top_bar = QWidget()
+        self.top_bar.setObjectName("topBar")
+        self.top_bar.setCursor(Qt.ArrowCursor)
+        top = QHBoxLayout(self.top_bar)
+        top.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("Zakonka by Vladislav_Shetkov")
         title.setObjectName("windowTitle")
         title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         top.addWidget(title)
@@ -707,7 +730,7 @@ class OverlayWindow(QMainWindow):
         close.setFixedSize(36, 32)
         close.clicked.connect(self.hide)
         top.addWidget(close)
-        layout.addLayout(top)
+        layout.addWidget(self.top_bar)
 
         search_row = QHBoxLayout()
         self.search = QLineEdit()
@@ -850,6 +873,16 @@ class OverlayWindow(QMainWindow):
         main_h_layout.addWidget(self.chat_panel)
         layout.addLayout(main_h_layout, 1)
 
+        # Ручка свободного ресайза (видна только в фокусе)
+        grip_row = QHBoxLayout()
+        grip_row.setContentsMargins(0, 0, 0, 0)
+        grip_row.addStretch()
+        self._size_grip = QSizeGrip(self)
+        self._size_grip.setVisible(False)
+        self._size_grip.setToolTip("Тяните, чтобы изменить размер")
+        grip_row.addWidget(self._size_grip)
+        layout.addLayout(grip_row)
+
         self.setStyleSheet("""
         QWidget#root { background:#17191d; border:1px solid #3a3d44; }
         
@@ -906,21 +939,43 @@ class OverlayWindow(QMainWindow):
         self.esc = QShortcut(QKeySequence("Esc"), self)
         self.esc.activated.connect(self.hide)
 
-    def populate(self):
-      self.list.clear()
-      for law, count in self.filtered:
-          # Оставляем только приписку с количеством, без перекраски всей строки
-          if count > 0 and self.search.text().strip():
-              item = QListWidgetItem(f"[{count}] {law.title}")
-          else:
-              item = QListWidgetItem(law.title)
-              
-          item.setData(Qt.UserRole, law)
-          self.list.addItem(item)
+    def populate(self, restore_filename: str | None = None, preserve_current: bool = True):
+      # Сохраняем выбор, чтобы свернуть/развернуть не сбрасывал закон.
+      # Для поиска preserve_current=False — показываем лучший результат (row 0).
+      if preserve_current and restore_filename is None and self.current_law is not None:
+          restore_filename = self.current_law.filename
+      self.list.blockSignals(True)
+      try:
+          self.list.clear()
+          for law, count in self.filtered:
+              # Оставляем только приписку с количеством, без перекраски всей строки
+              if count > 0 and self.search.text().strip():
+                  item = QListWidgetItem(f"[{count}] {law.title}")
+              else:
+                  item = QListWidgetItem(law.title)
+                  
+              item.setData(Qt.UserRole, law)
+              self.list.addItem(item)
+      finally:
+          self.list.blockSignals(False)
 
       self.count.setText(f"Показано: {len(self.filtered)} из {len(self.laws)}")
       if self.filtered:
-          self.list.setCurrentRow(0)
+          restore_row = -1
+          if restore_filename:
+              for row, (law, _count) in enumerate(self.filtered):
+                  if law.filename == restore_filename:
+                      restore_row = row
+                      break
+          if restore_row >= 0:
+              # Тот же закон: выбираем без сброса скролла через select_law
+              self._restoring_state = True
+              try:
+                  self.list.setCurrentRow(restore_row)
+              finally:
+                  self._restoring_state = False
+          else:
+              self.list.setCurrentRow(0)
       else:
           self.law_title.setText("Ничего не найдено")
           self.reader.setHtml("<div style='color:#9ca3af;padding:20px'>По запросу ничего не найдено.</div>")
@@ -931,7 +986,7 @@ class OverlayWindow(QMainWindow):
             q = query.strip().casefold()
             if not q:
                 self.filtered = [(law, 0) for law in self.laws]
-                self.populate()
+                self.populate(preserve_current=False)
                 return
 
             terms = [x for x in re.split(r"\s+", q) if x]
@@ -949,7 +1004,7 @@ class OverlayWindow(QMainWindow):
             # Сортируем: сначала те, где больше всего совпадений
             found.sort(key=lambda x: x[1], reverse=True)
             self.filtered = found
-            self.populate()
+            self.populate(preserve_current=False)
 
     def select_law(self, current, previous):
             if current is None:
@@ -983,6 +1038,18 @@ class OverlayWindow(QMainWindow):
             {text_to_html(text, terms)}
             """
             self.reader.setHtml(html_content)
+            if self._restoring_state:
+                # Восстановление после свернуть/развернуть: та же страница
+                if self._saved_scroll:
+                    QTimer.singleShot(
+                        0,
+                        lambda v=self._saved_scroll: self.reader.verticalScrollBar().setValue(v),
+                    )
+                if terms:
+                    self.nav_widget.show()
+                else:
+                    self.nav_widget.hide()
+                return
             self.reader.verticalScrollBar().setValue(0)
             
             # Показываем кнопки навигации и прыгаем к первому совпадению
@@ -1031,16 +1098,112 @@ class OverlayWindow(QMainWindow):
         dlg.exec()
 
     def reload_laws(self):
+        current_filename = self.current_law.filename if self.current_law else None
         self.laws = load_laws()
-        self.filtered = [(law, 0) for law in self.laws]
-        self.populate()
+        query = self.search.text().strip()
+        if query:
+            # filter_laws сам вызовет populate на лучший результат
+            self.filter_laws(query)
+        else:
+            self.filtered = [(law, 0) for law in self.laws]
+            self.populate(restore_filename=current_filename)
         self.want_reindex.emit()
 
     def show_centered(self):
-        self.center_on_screen()
+        # Центрируем только при первом показе; дальше сохраняем позицию/размер
+        if self._first_show:
+            self.center_on_screen()
+            self._first_show = False
         self.show()
         self.raise_()
         self.set_click_through(True)
+
+    def show_preserved(self):
+        """Показать без сброса позиции, размера, закона и скролла."""
+        if self._first_show:
+            self.center_on_screen()
+            self._first_show = False
+        self.show()
+        self.raise_()
+        self.set_click_through(True)
+        if self._saved_scroll:
+            QTimer.singleShot(
+                0,
+                lambda v=self._saved_scroll: self.reader.verticalScrollBar().setValue(v),
+            )
+
+    def hideEvent(self, event):
+        try:
+            self._saved_law_filename = (
+                self.current_law.filename if self.current_law else None
+            )
+            self._saved_scroll = self.reader.verticalScrollBar().value()
+        except Exception:
+            pass
+        self._drag_offset = None
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Если список пуст из-за внешнего обновления — восстановить выбор
+        if (
+            self._saved_law_filename
+            and self.current_law is None
+            and self.filtered
+        ):
+            self.populate(restore_filename=self._saved_law_filename)
+        if self._saved_scroll:
+            QTimer.singleShot(
+                0,
+                lambda v=self._saved_scroll: self.reader.verticalScrollBar().setValue(v),
+            )
+
+    def _header_hit(self, pos) -> bool:
+        """Клик по шапке (не по кнопкам), только в фокусе."""
+        if self.is_click_through:
+            return False
+        if not hasattr(self, "top_bar"):
+            return False
+        try:
+            origin = self.top_bar.mapTo(self, QPoint(0, 0))
+            in_x = origin.x() <= pos.x() <= origin.x() + self.top_bar.width()
+            in_y = origin.y() <= pos.y() <= origin.y() + self.top_bar.height()
+            if not (in_x and in_y):
+                return False
+        except Exception:
+            return False
+        child = self.childAt(pos)
+        if isinstance(child, (QPushButton, QLineEdit, QComboBox)):
+            return False
+        return True
+
+    def mousePressEvent(self, event):
+        if (
+            event.button() == Qt.LeftButton
+            and self._header_hit(event.position().toPoint())
+        ):
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (
+            self._drag_offset is not None
+            and event.buttons() & Qt.LeftButton
+            and not self.is_click_through
+        ):
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._drag_offset is not None:
+            self._drag_offset = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -1062,7 +1225,7 @@ class OverlayWindow(QMainWindow):
 
     def focus_search(self):
         if not self.isVisible():
-            self.show_centered()
+            self.show_preserved()
             self.set_click_through(False)
         elif not self.is_click_through:
             self.set_click_through(True)
@@ -1082,7 +1245,7 @@ class OverlayWindow(QMainWindow):
         base_width = int(self.config.get("window", {}).get("width", 1180))
         target_width = base_width + 410 if is_hidden else base_width
         self.resize(target_width, self.height())
-        self.center_on_screen()
+        # Не центрируем: иначе теряется позиция после drag/resize
 
         if is_hidden and not self.is_click_through:
             self.chat_input.setFocus()
@@ -1252,19 +1415,29 @@ class AppController(QObject):
         if self.window.isVisible():
             self.window.hide()
         else:
-            self.window.laws = load_laws()
-            self.window.filtered = [(law, 0) for law in self.window.laws]
-            self.window.populate()
-            self.window.show_centered()
+            # Не перезагружаем и не сбрасываем список: закон и страница остаются.
+            # Обновление базы — только через «Обновить» / reindex.
+            self.window.show_preserved()
 
     def reindex(self):
         if hasattr(self, "worker") and self.worker.isRunning():
             return
 
+        saved_filename = (
+            self.window.current_law.filename
+            if self.window.current_law else None
+        )
+        saved_query = self.window.search.text().strip() if hasattr(self.window, "search") else ""
         self.laws = load_laws()
         self.window.laws = self.laws
-        self.window.filtered = [(law, 0) for law in self.window.laws]
-        self.window.populate()
+        if saved_query:
+            # Сохраняем активный поиск при фоновом обновлении
+            self.window.filter_laws(saved_query)
+            if saved_filename:
+                self.window.populate(restore_filename=saved_filename)
+        else:
+            self.window.filtered = [(law, 0) for law in self.window.laws]
+            self.window.populate(restore_filename=saved_filename)
         self.window.status.setText("Проверка файлов...")
 
         self.worker = IndexWorker(self.laws)
