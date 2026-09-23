@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv, set_key
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer, QPoint
+from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer, QPoint, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QAction, QFont, QKeySequence, QShortcut, QTextDocument, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -639,6 +639,13 @@ class OverlayWindow(QMainWindow):
         # Drag за шапку (только в фокусе)
         self._drag_offset: QPoint | None = None
         self._size_grip: QSizeGrip | None = None
+        # Сворачиваемые панели (состояние сбрасывается при перезапуске)
+        self._left_collapsed: bool = False
+        self._left_width: int = 390
+        self._chat_width: int = 400
+        self._compact_mode: bool = False
+        self._panel_anim: QPropertyAnimation | None = None
+        self._chat_anim: QPropertyAnimation | None = None
 
         self.setWindowTitle("Законодательство")
         self.setWindowFlags(
@@ -705,6 +712,13 @@ class OverlayWindow(QMainWindow):
         self.top_bar.setCursor(Qt.ArrowCursor)
         top = QHBoxLayout(self.top_bar)
         top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+        self.btn_toggle_list = QPushButton("◀")
+        self.btn_toggle_list.setObjectName("ghostButton")
+        self.btn_toggle_list.setFixedSize(36, 32)
+        self.btn_toggle_list.setToolTip("Скрыть/показать список законов")
+        self.btn_toggle_list.clicked.connect(self.toggle_left_panel)
+        top.addWidget(self.btn_toggle_list)
         title = QLabel("Zakonka by Vladislav_Shetkov")
         title.setObjectName("windowTitle")
         title.setFont(QFont("Segoe UI", 14, QFont.Bold))
@@ -716,23 +730,56 @@ class OverlayWindow(QMainWindow):
         top.addWidget(self.status)
 
         self.btn_chat = QPushButton("AI")
+        self.btn_chat.setObjectName("ghostButton")
         self.btn_chat.setFixedSize(50, 32)
+        self.btn_chat.setToolTip("Показать/скрыть ИИ-помощника")
         self.btn_chat.clicked.connect(self.toggle_chat)
         top.addWidget(self.btn_chat)
 
+        self.btn_compact = QPushButton("▲")
+        self.btn_compact.setObjectName("ghostButton")
+        self.btn_compact.setFixedSize(36, 32)
+        self.btn_compact.setToolTip("Компактный режим: только текст закона")
+        self.btn_compact.clicked.connect(self.toggle_compact_mode)
+        top.addWidget(self.btn_compact)
+
         settings = QPushButton("⚙")
+        settings.setObjectName("ghostButton")
         settings.setFixedSize(36, 32)
         settings.setToolTip("Горячая клавиша")
         settings.clicked.connect(self.open_settings)
         top.addWidget(settings)
 
         close = QPushButton("✕")
+        close.setObjectName("ghostButton")
         close.setFixedSize(36, 32)
         close.clicked.connect(self.hide)
         top.addWidget(close)
         layout.addWidget(self.top_bar)
 
-        search_row = QHBoxLayout()
+        # Тонкая полоса компактного режима (только ридер + кнопка развернуть)
+        self.compact_bar = QWidget()
+        self.compact_bar.setObjectName("compactBar")
+        compact_layout = QHBoxLayout(self.compact_bar)
+        compact_layout.setContentsMargins(2, 0, 2, 0)
+        compact_layout.setSpacing(6)
+        self.btn_expand = QPushButton("▼")
+        self.btn_expand.setObjectName("ghostButton")
+        self.btn_expand.setFixedSize(36, 28)
+        self.btn_expand.setToolTip("Вернуть панели")
+        self.btn_expand.clicked.connect(self.toggle_compact_mode)
+        compact_layout.addWidget(self.btn_expand)
+        self.compact_title = QLabel("")
+        self.compact_title.setObjectName("compactTitle")
+        compact_layout.addWidget(self.compact_title, 1)
+        self.compact_bar.hide()
+        layout.addWidget(self.compact_bar)
+
+        self.search_bar = QWidget()
+        self.search_bar.setObjectName("searchBar")
+        search_row = QHBoxLayout(self.search_bar)
+        search_row.setContentsMargins(0, 0, 0, 0)
+        search_row.setSpacing(8)
         self.search = QLineEdit()
         self.search.setPlaceholderText(
             "Поиск по названиям и тексту законов..."
@@ -744,13 +791,17 @@ class OverlayWindow(QMainWindow):
         refresh = QPushButton("Обновить")
         refresh.clicked.connect(self.reload_laws)
         search_row.addWidget(refresh)
-        layout.addLayout(search_row)
+        layout.addWidget(self.search_bar)
 
-        splitter = QSplitter(Qt.Horizontal)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setHandleWidth(6)
 
-        left = QFrame()
-        left_l = QVBoxLayout(left)
+        self.left_panel = QFrame()
+        self.left_panel.setObjectName("leftPanel")
+        self.left_panel.setMinimumWidth(0)
+        left_l = QVBoxLayout(self.left_panel)
         left_l.setContentsMargins(0, 0, 0, 0)
+        left_l.setSpacing(6)
         self.list = QListWidget()
         self.list.setAlternatingRowColors(True)
         self.list.currentItemChanged.connect(self.select_law)
@@ -758,10 +809,11 @@ class OverlayWindow(QMainWindow):
         self.count = QLabel()
         self.count.setObjectName("count")
         left_l.addWidget(self.count)
-        splitter.addWidget(left)
+        self.splitter.addWidget(self.left_panel)
 
-        right = QFrame()
-        right_l = QVBoxLayout(right)
+        self.right_panel = QFrame()
+        self.right_panel.setObjectName("rightPanel")
+        right_l = QVBoxLayout(self.right_panel)
         right_l.setContentsMargins(0, 0, 0, 0)
 
         header = QHBoxLayout()
@@ -782,10 +834,12 @@ class OverlayWindow(QMainWindow):
         nav_layout.setSpacing(5)
         
         self.btn_prev = QPushButton("▲")
+        self.btn_prev.setObjectName("ghostButton")
         self.btn_prev.setFixedSize(28, 28)
         self.btn_prev.clicked.connect(self.find_prev)
         
         self.btn_next = QPushButton("▼")
+        self.btn_next.setObjectName("ghostButton")
         self.btn_next.setFixedSize(28, 28)
         self.btn_next.clicked.connect(self.find_next)
         
@@ -804,22 +858,35 @@ class OverlayWindow(QMainWindow):
             lambda url: webbrowser.open(url.toString())
         )
         right_l.addWidget(self.reader, 1)
-        splitter.addWidget(right)
-        splitter.setSizes([390, 790])
+        self.splitter.addWidget(self.right_panel)
+        self.splitter.setSizes([390, 790])
 
         # Обертка для сплиттера и чата
-        main_h_layout = QHBoxLayout()
-        main_h_layout.addWidget(splitter, 1)
+        self.main_h_layout = QHBoxLayout()
+        self.main_h_layout.setSpacing(8)
+        self.main_h_layout.addWidget(self.splitter, 1)
 
         # --- ПАНЕЛЬ ИИ ЧАТА ---
         self.chat_panel = QFrame()
-        self.chat_panel.setFixedWidth(400)
+        self.chat_panel.setObjectName("chatPanel")
+        self.chat_panel.setMinimumWidth(0)
+        self.chat_panel.setMaximumWidth(0)
         chat_l = QVBoxLayout(self.chat_panel)
         chat_l.setContentsMargins(0, 0, 0, 0)
+        chat_l.setSpacing(6)
         
+        chat_header = QHBoxLayout()
         chat_title = QLabel("ИИ Помощник")
+        chat_title.setObjectName("chatTitle")
         chat_title.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        chat_l.addWidget(chat_title)
+        chat_header.addWidget(chat_title, 1)
+        self.btn_hide_chat = QPushButton("▶")
+        self.btn_hide_chat.setObjectName("ghostButton")
+        self.btn_hide_chat.setFixedSize(32, 28)
+        self.btn_hide_chat.setToolTip("Скрыть чат")
+        self.btn_hide_chat.clicked.connect(self.toggle_chat)
+        chat_header.addWidget(self.btn_hide_chat)
+        chat_l.addLayout(chat_header)
 
         self.chat_history = QTextBrowser()
         self.chat_history.setHtml("""
@@ -870,8 +937,8 @@ class OverlayWindow(QMainWindow):
         chat_l.addLayout(chat_input_row)
         self.chat_panel.hide() # Скрыт по умолчанию
 
-        main_h_layout.addWidget(self.chat_panel)
-        layout.addLayout(main_h_layout, 1)
+        self.main_h_layout.addWidget(self.chat_panel)
+        layout.addLayout(self.main_h_layout, 1)
 
         # Ручка свободного ресайза (видна только в фокусе)
         grip_row = QHBoxLayout()
@@ -884,53 +951,68 @@ class OverlayWindow(QMainWindow):
         layout.addLayout(grip_row)
 
         self.setStyleSheet("""
-        QWidget#root { background:#17191d; border:1px solid #3a3d44; }
-        
-        /* Исправление невидимых текстов */
-        QLabel { color: #e5e7eb; } 
-        QLabel#windowTitle { color:#f3f4f6; }
-        QLabel#status, QLabel#count { color:#9ca3af; }
-        QLabel#lawTitle { color:#ffffff; font-size:16px; font-weight:bold; } 
+        QWidget#root { background:#1a1d22; border:1px solid #43464f; border-radius:10px; }
+        QWidget#topBar { background:transparent; }
+        QWidget#compactBar { background:#22252c; border:1px solid #3a3d44; border-radius:8px; }
+        QWidget#searchBar { background:transparent; }
+        QFrame#leftPanel, QFrame#rightPanel, QFrame#chatPanel {
+            background:transparent; border:none;
+        }
+
+        QLabel { color: #e5e7eb; }
+        QLabel#windowTitle { color:#f3f4f6; font-size:15px; letter-spacing:0.3px; }
+        QLabel#status, QLabel#count { color:#9ca3af; font-size:12px; }
+        QLabel#lawTitle { color:#ffffff; font-size:16px; font-weight:bold; }
+        QLabel#chatTitle { color:#f3f4f6; }
+        QLabel#compactTitle { color:#d1d5db; font-size:13px; }
 
         QLineEdit {
-            background:#22252b; border:1px solid #3a3d44;
-            border-radius:8px; padding:8px 10px; color:#f3f4f6;
-            font-size:14px;
+            background:#22252c; border:1px solid #43464f;
+            border-radius:10px; padding:9px 12px; color:#f3f4f6;
+            font-size:14px; selection-background-color:#fbbf24; selection-color:#111316;
         }
-        QLineEdit:focus { border:1px solid #6b7280; }
-        
+        QLineEdit:focus { border:1px solid #fbbf24; background:#24272f; }
+        QLineEdit::clear-button { background:transparent; }
+
         QPushButton {
-            background:#24272e; border:1px solid #3a3d44;
-            border-radius:7px; padding:7px 11px; color:#e5e7eb; 
-            font-weight:bold; /* Делает стрелки поиска четче */
+            background:#262931; border:1px solid #43464f;
+            border-radius:9px; padding:7px 11px; color:#e5e7eb;
+            font-weight:600;
         }
-        QPushButton:hover { background:#2d3139; }
-        QPushButton:disabled { color:#737780; }
-        
+        QPushButton:hover { background:#30343d; border-color:#5b606b; }
+        QPushButton:pressed { background:#1f2227; }
+        QPushButton:disabled { color:#6b7280; background:#22252b; border-color:#34373f; }
+        QPushButton#ghostButton {
+            background:#22252c; border:1px solid transparent;
+            border-radius:8px; font-weight:bold;
+        }
+        QPushButton#ghostButton:hover { background:#30343d; border-color:#43464f; }
+
         QListWidget {
-            background:#1f2227; alternate-background-color:#262931;
-            border:1px solid #34373f;
-            border-radius:8px; color:#e5e7eb;
-            outline:none; font-size:13px;
+            background:#1f2227; alternate-background-color:#252931;
+            border:1px solid #3a3d44;
+            border-radius:10px; color:#e5e7eb;
+            outline:none; font-size:13px; padding:4px;
         }
         QListWidget::item {
-            padding:9px 10px; border-bottom:1px solid #2b2e34;
+            padding:9px 10px; border:none; border-radius:7px; margin:1px 2px;
         }
-        QListWidget::item:selected { 
-            background:#32363f; 
-            border-left: 3px solid #fbbf24; /* Желтая полоска у выбранного закона */
-        } 
-        
+        QListWidget::item:hover { background:#2a2e36; }
+        QListWidget::item:selected {
+            background:#32363f;
+            border-left:3px solid #fbbf24;
+        }
+
         QTextBrowser {
-            background:#111316; border:1px solid #34373f;
-            border-radius:8px; color:#e5e7eb;
+            background:#121418; border:1px solid #3a3d44;
+            border-radius:10px; color:#e5e7eb;
             padding:12px; font-family:"Segoe UI"; font-size:14px;
         }
-        
-        /* Заставляет активное слово в поиске выделяться желтым, а не системным белым */
-        QTextBrowser::selection {
-            background-color: #fbbf24; color: #111316; 
-        }
+        QTextBrowser::selection { background-color:#fbbf24; color:#111316; }
+
+        QSplitter::handle { background:#2c3038; border-radius:3px; }
+        QSplitter::handle:horizontal { width:6px; margin:0 2px; }
+        QSplitter::handle:hover { background:#fbbf24; }
         """)
 
         self.populate()
@@ -1015,6 +1097,8 @@ class OverlayWindow(QMainWindow):
 
             self.current_law = law
             self.law_title.setText(law.title)
+            if hasattr(self, "compact_title"):
+                self.compact_title.setText(law.title)
             self.original.setEnabled(bool(law.url))
 
             text = read_text_file(LAWS_DIR / law.filename)
@@ -1162,20 +1246,24 @@ class OverlayWindow(QMainWindow):
         """Клик по шапке (не по кнопкам), только в фокусе."""
         if self.is_click_through:
             return False
-        if not hasattr(self, "top_bar"):
-            return False
-        try:
-            origin = self.top_bar.mapTo(self, QPoint(0, 0))
-            in_x = origin.x() <= pos.x() <= origin.x() + self.top_bar.width()
-            in_y = origin.y() <= pos.y() <= origin.y() + self.top_bar.height()
-            if not (in_x and in_y):
-                return False
-        except Exception:
-            return False
-        child = self.childAt(pos)
-        if isinstance(child, (QPushButton, QLineEdit, QComboBox)):
-            return False
-        return True
+        bars = []
+        if getattr(self, "_compact_mode", False) and hasattr(self, "compact_bar"):
+            bars.append(self.compact_bar)
+        elif hasattr(self, "top_bar"):
+            bars.append(self.top_bar)
+        for bar in bars:
+            try:
+                origin = bar.mapTo(self, QPoint(0, 0))
+                in_x = origin.x() <= pos.x() <= origin.x() + bar.width()
+                in_y = origin.y() <= pos.y() <= origin.y() + bar.height()
+                if in_x and in_y:
+                    child = self.childAt(pos)
+                    if isinstance(child, (QPushButton, QLineEdit, QComboBox)):
+                        return False
+                    return True
+            except Exception:
+                continue
+        return False
 
     def mousePressEvent(self, event):
         if (
@@ -1238,17 +1326,95 @@ class OverlayWindow(QMainWindow):
         self.search.setFocus()
         self.search.selectAll()
 
+    def _animate_max_width(self, widget, start: int, end: int, duration: int = 180, slot: str = "panel"):
+        """Плавное сворачивание/разворачивание панели (только панели)."""
+        attr = "_chat_anim" if slot == "chat" else "_panel_anim"
+        prev = getattr(self, attr, None)
+        try:
+            if prev is not None:
+                prev.stop()
+        except Exception:
+            pass
+        anim = QPropertyAnimation(widget, b"maximumWidth", self)
+        anim.setDuration(duration)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setEasingCurve(QEasingCurve.InOutCubic)
+        # Держим ссылку, иначе анимация остановится сборщиком мусора
+        setattr(self, attr, anim)
+        anim.start()
+        return anim
+
+    def toggle_left_panel(self):
+        if self._compact_mode:
+            self.toggle_compact_mode()
+            return
+        if self._left_collapsed:
+            self.left_panel.setVisible(True)
+            self._animate_max_width(self.left_panel, 0, self._left_width)
+            self._left_collapsed = False
+            self.btn_toggle_list.setText("◀")
+        else:
+            if self.left_panel.width() > 0:
+                self._left_width = self.left_panel.width()
+            anim = self._animate_max_width(self.left_panel, self.left_panel.width(), 0)
+            self._left_collapsed = True
+            self.btn_toggle_list.setText("▶")
+
+            def _hide():
+                if self._left_collapsed:
+                    self.left_panel.setVisible(False)
+
+            anim.finished.connect(_hide)
+
     def toggle_chat(self):
+        if self._compact_mode:
+            self.toggle_compact_mode()
+            return
         is_hidden = self.chat_panel.isHidden()
-        self.chat_panel.setVisible(is_hidden)
-
         base_width = int(self.config.get("window", {}).get("width", 1180))
-        target_width = base_width + 410 if is_hidden else base_width
-        self.resize(target_width, self.height())
-        # Не центрируем: иначе теряется позиция после drag/resize
+        if is_hidden:
+            self.chat_panel.setVisible(True)
+            self.chat_panel.setMaximumWidth(0)
+            self._chat_anim = self._animate_max_width(
+                self.chat_panel, 0, self._chat_width, slot="chat"
+            )
+            self.resize(base_width + self._chat_width + 10, self.height())
+            # Не центрируем: иначе теряется позиция после drag/resize
+            if not self.is_click_through:
+                self.chat_input.setFocus()
+        else:
+            anim = self._animate_max_width(
+                self.chat_panel, self.chat_panel.width(), 0, slot="chat"
+            )
+            self._chat_anim = anim
+            self.resize(base_width, self.height())
 
-        if is_hidden and not self.is_click_through:
-            self.chat_input.setFocus()
+            def _hide():
+                self.chat_panel.setVisible(False)
+
+            anim.finished.connect(_hide)
+
+    def toggle_compact_mode(self):
+        """Компактный режим: только текст закона + тонкая полоса."""
+        self._compact_mode = not self._compact_mode
+        if self._compact_mode:
+            self.top_bar.hide()
+            self.search_bar.hide()
+            self.left_panel.hide()
+            self.chat_panel.hide()
+            title = self.current_law.title if self.current_law else "Законодательство"
+            self.compact_title.setText(title)
+            self.compact_bar.show()
+            self.btn_compact.setText("▼")
+        else:
+            self.compact_bar.hide()
+            self.top_bar.show()
+            self.search_bar.show()
+            if not self._left_collapsed:
+                self.left_panel.show()
+                self.left_panel.setMaximumWidth(self._left_width)
+            self.btn_compact.setText("▲")
 
     def center_on_screen(self):
         screen = QApplication.screenAt(self.frameGeometry().center())

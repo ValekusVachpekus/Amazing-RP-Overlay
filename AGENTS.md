@@ -57,9 +57,13 @@
     поиск (`filter_laws`) вызывает с `preserve_current=False` (прыжок на топ-результат).
   - `select_law` при `_restoring_state` не сбрасывает скролл в 0.
   - Drag: только в фокусе, за `self.top_bar` (`_header_hit` + mousePress/Move/Release).
-    Клики по кнопкам/инпутам drag не начинают.
+    Клики по кнопкам/инпутам drag не начинают. В компактном режиме drag за `compact_bar`.
   - Resize: свободный, только в фокусе, через `QSizeGrip` справа внизу.
-    `toggle_chat()` размер меняет, но НЕ центрирует.
+  - Сворачиваемые панели (состояние НЕ сохраняется между запусками):
+    список (`toggle_left_panel`, кнопка ◀/▶), чат (`toggle_chat`, кнопка AI/▶),
+    компактный режим «только ридер» (`toggle_compact_mode`, кнопки ▲/▼).
+    Анимация только панелей: `_animate_max_width` (`QPropertyAnimation`,
+    180мс, `InOutCubic`).
 - `AppController` — владеет окном, треем, хоткеями, `IndexWorker`.
   `toggle()` = hide/show без сброса. `reindex()` сохраняет поиск/выбор.
 - `GlobalHotkey` — отдельный `threading.Thread` на хоткей через Win32
