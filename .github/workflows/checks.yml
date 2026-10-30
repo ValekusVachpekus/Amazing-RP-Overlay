@@ -1,0 +1,29 @@
+name: Backend and clients
+on: [push, pull_request]
+jobs:
+  python:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      AMAZING_OVERLAY_PIPE: amazing-law-overlay-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: python -m pip install -r requirements_backend.txt
+      - run: python -m compileall -q amazing_overlay
+      - run: python -m unittest discover -s tests -p test_backend.py -v
+      - run: python -m unittest discover -s tests -p test_parser.py -v
+  native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S native -B native/out -A Win32
+      - run: cmake --build native/out --config Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AmazingLawClient-x86
+          path: |
+            native/out/Release/AmazingLawClient.dll
+            native/out/Release/AmazingLawClient.asi

@@ -1,4 +1,24 @@
-LAW OVERLAY
+# Amazing Law Overlay 2
+
+Новая версия разделена на бэкенд, окно управления источниками и настройками,
+внешний оверлей и экспериментальный x86 ASI/DLL-клиент.
+
+- `run_manager.bat` — парсер, источники, ИИ и настройки.
+- `run_overlay.bat` — внешний клиент; сам подключает/запускает бэкенд.
+- `run_backend.bat` — самостоятельный сервис.
+- `build_native.bat` — сборка ASI/DLL для Direct3D 9.
+- `build_portable.bat` — переносимый комплект без Python у пользователей.
+
+**[Запуск, архитектура и ограничения v2](docs/V2.md)** ·
+[Локальный API](docs/PROTOCOL.md) · [Проверка в игре](docs/GAME_ACCEPTANCE.md)
+
+DLL ещё требует приёмки непосредственно в Amazing: standalone-тест не подтверждает отсутствие АФК.
+
+---
+
+Ниже сохранена историческая документация v1; для новых запусков используйте инструкции v2.
+
+LAW OVERLAY (legacy)
 
 1. Put these files into the SAME folder that contains the parser's `laws` directory:
 

@@ -1,0 +1,131 @@
+"""Real named-pipe RPC and offscreen Qt windows, isolated from user data."""
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QFontDatabase, QFont
+
+from amazing_overlay.settings import PIPE_NAME, ROOT
+from amazing_overlay.transport import rpc
+
+
+class IntegrationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        from amazing_overlay.ui import STYLE
+        font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "segoeui.ttf"
+        if font.exists():
+            QFontDatabase.addApplicationFont(str(font))
+        cls.app.setFont(QFont("Segoe UI", 10))
+        cls.app.setStyleSheet(STYLE)
+        cls.temporary = tempfile.TemporaryDirectory()
+        env = dict(os.environ, AMAZING_OVERLAY_DATA=cls.temporary.name, AMAZING_OVERLAY_PIPE=PIPE_NAME)
+        cls.process = subprocess.Popen([sys.executable, "-m", "amazing_overlay", "backend"], cwd=ROOT, env=env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                rpc("health")
+                from amazing_overlay.store import Store
+                from amazing_overlay.documents import parse_html
+                store = Store(Path(cls.temporary.name) / "laws.db")
+                store.publish({"schema_version": 1, "id": "test-table", "url": "", "title": "000 • Таблицы", "structured": True,
+                               "pages": 1, "posts": [{"post_id": "table", "author": "", "blocks": parse_html(
+                                   '<h3>Статья 12. Таблица</h3><table><tr><th rowspan="2">Ведомство</th><th colspan="2">Должности</th></tr><tr><th>Руководитель</th><th>Заместитель</th></tr><tr><td>МВД</td><td>Генерал</td><td>Полковник</td></tr></table>', "")} ]})
+                return
+            except ConnectionError:
+                time.sleep(0.1)
+        cls.process.terminate()
+        output = cls.process.communicate(timeout=5)
+        raise AssertionError("Backend did not start: " + repr(output))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.process.terminate()
+        cls.process.communicate(timeout=5)
+        cls.temporary.cleanup()
+
+    def events_until(self, predicate, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.app.processEvents()
+            if predicate():
+                return
+            time.sleep(0.01)
+        self.fail("Qt operation timed out")
+
+    def test_roundtrip_and_errors(self):
+        health = rpc("health")
+        self.assertEqual(health["version"], 1)
+        self.assertNotIn("ai_api_key", rpc("settings"))
+        rpc("state_set", {"key": "test", "value": {"hello": "Привет"}})
+        self.assertEqual(rpc("state_get", {"key": "test"}), {"hello": "Привет"})
+        with self.assertRaises(RuntimeError):
+            rpc("unknown_method")
+
+    def test_native_dx9_host_and_same_rpc(self):
+        binary = ROOT / "native" / "out-local" / "overlay_native_smoke.exe"
+        if not binary.exists():
+            self.skipTest("Build native/out-local first; game input still requires manual acceptance")
+        result = subprocess.run([str(binary), "--self-test"], cwd=binary.parent, timeout=20,
+                                env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+
+    def test_manager_offscreen(self):
+        from amazing_overlay.ui import ManagerWindow
+        window = ManagerWindow()
+        try:
+            window.show()
+            self.events_until(lambda: bool(window.source_values))
+            self.assertEqual(window.tabs.count(), 5)
+            self.assertGreater(window.sources.rowCount(), 0)
+            self.assertIn("Ключ", window.env_label.text())
+            output = ROOT / ".cache" / "manager-preview.png"
+            output.parent.mkdir(exist_ok=True)
+            self.assertTrue(window.grab().save(str(output)))
+        finally:
+            window.close()
+            self.events_until(lambda: not window.work)
+
+    def test_overlay_preserves_document_and_search_stays_responsive(self):
+        from amazing_overlay.ui import OverlayWindow
+        with patch("amazing_overlay.ui.set_input"), patch("amazing_overlay.ui.Hotkeys"):
+            window = OverlayWindow()
+            try:
+                window.show()
+                self.events_until(lambda: window.current_doc is not None)
+                ident = window.current_id
+                for _ in range(100):
+                    window.toggle()
+                    window.toggle()
+                self.assertEqual(window.current_id, ident)
+                window.set_mode("input")
+                window.search.setText("задержание")
+                self.events_until(lambda: window.law_list.count() > 0 and "Совпадений" in window.status.text())
+                self.assertTrue(window.left.isVisible())
+                window.law_list.setCurrentRow(0)
+                self.events_until(lambda: not window.work)
+                output = ROOT / ".cache" / "overlay-preview.png"
+                self.assertTrue(window.grab().save(str(output)))
+            finally:
+                window.scope_timer.stop()
+                window.timer.stop()
+                window.hotkeys.clear()
+                window.tray.hide()
+                window.save_state()
+                self.events_until(lambda: not window.work)
+                window.closed = True
+                window.hide()
+
+
+if __name__ == "__main__":
+    unittest.main()
