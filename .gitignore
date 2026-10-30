@@ -1,2 +1,16 @@
 .venv
 .env
+__pycache__/
+*.py[cod]
+.browser-profile/
+debug/
+.cache/
+build/
+dist/
+*.spec
+*.db
+*.db-shm
+*.db-wal
+.vs/
+native/out/
+native/out-local/

@@ -15,7 +15,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [2/3] Installing Playwright...
-.venv\Scripts\python.exe -m pip install -r requirements_playwright.txt
+.venv\Scripts\python.exe -m pip install -r requirements_backend.txt
 if errorlevel 1 goto :error
 
 echo [3/3] Installing Chromium...
@@ -25,7 +25,7 @@ if errorlevel 1 goto :error
 echo.
 echo Starting parser...
 echo.
-.venv\Scripts\python.exe -u playwright_laws_parser.py
+.venv\Scripts\python.exe -u -m amazing_overlay.cli --export laws
 
 echo.
 pause

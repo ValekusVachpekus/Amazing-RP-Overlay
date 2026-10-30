@@ -1772,4 +1772,7 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # The old window remains importable for regression tests during migration.
+    from amazing_overlay.__main__ import main as client_main
+    sys.argv.insert(1, "overlay")
+    raise SystemExit(client_main())

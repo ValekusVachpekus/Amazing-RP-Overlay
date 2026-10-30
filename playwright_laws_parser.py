@@ -577,4 +577,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Keep the historical entry point; all new parsing lives in the backend.
+    from amazing_overlay.cli import main as backend_main
+    sys.exit(backend_main())

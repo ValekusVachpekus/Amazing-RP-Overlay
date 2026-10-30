@@ -11,12 +11,12 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo Installing/updating PySide6...
-.venv\Scripts\python.exe -m pip install -r requirements_overlay.txt
+.venv\Scripts\python.exe -m pip install -r requirements_backend.txt
 if errorlevel 1 goto :error
 
 echo.
 echo Starting Law Overlay in background...
-start "" /b .venv\Scripts\pythonw.exe law_overlay.py
+start "" /b .venv\Scripts\pythonw.exe -m amazing_overlay overlay
 
 echo Started.
 timeout /t 2 >nul
