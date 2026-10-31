@@ -79,6 +79,12 @@ class IntegrationTest(unittest.TestCase):
         result = subprocess.run([str(binary), "--self-test"], cwd=binary.parent, timeout=20,
                                 env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        logs = list(Path(self.temporary.name).glob("native-client-*.log"))
+        self.assertTrue(logs, "Native startup must produce a diagnostic log")
+        log = "\n".join(path.read_text(encoding="utf-8") for path in logs)
+        self.assertIn("Hooking game cursor recenter / clip", log)
+        self.assertIn("First EndScene callback received", log)
+        self.assertIn("Renderer initialized", log)
 
     def test_manager_offscreen(self):
         from amazing_overlay.ui import ManagerWindow
@@ -103,6 +109,13 @@ class IntegrationTest(unittest.TestCase):
             try:
                 window.show()
                 self.events_until(lambda: window.current_doc is not None)
+                ids = [window.law_list.item(i).data(256)["id"] for i in range(window.law_list.count())]
+                self.assertGreaterEqual(len(ids), 3)
+                window.switch_law(1)
+                window.switch_law(1)
+                self.events_until(lambda: window.current_id == ids[2] and not window.work)
+                window.switch_law(-1)
+                self.events_until(lambda: window.current_id == ids[1] and not window.work)
                 ident = window.current_id
                 for _ in range(100):
                     window.toggle()

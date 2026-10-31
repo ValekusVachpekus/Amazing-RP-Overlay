@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
                               QVBoxLayout, QWidget)
 
 from .documents import chunks
-from .settings import ROOT
+from .settings import ROOT, DEFAULTS
 from .transport import background, ensure_backend, rpc
 from .win32 import Hotkeys, activate, belongs_to_game, foreground, parse_hotkey, set_input
 
@@ -253,7 +253,9 @@ class ManagerWindow(RemoteWindow):
     def make_appearance(self):
         layout = self.tab("Оформление и клавиши")
         form = QFormLayout()
-        for key, title in (("toggle_hotkey", "Показать / скрыть"), ("input_hotkey", "Переключить ввод")):
+        for key, title in (("toggle_hotkey", "Показать / скрыть"), ("input_hotkey", "Переключить ввод"),
+                           ("prev_law_hotkey", "Предыдущий закон"), ("next_law_hotkey", "Следующий закон"),
+                           ("scroll_up_hotkey", "Прокрутка вверх"), ("scroll_down_hotkey", "Прокрутка вниз")):
             self.inputs[key] = QLineEdit()
             form.addRow(title, self.inputs[key])
         font = QSpinBox()
@@ -293,7 +295,7 @@ class ManagerWindow(RemoteWindow):
             if key == "ai_api_key":
                 field.clear()
             elif isinstance(field, QLineEdit):
-                field.setText(str(values.get(key, "")))
+                field.setText(str(values.get(key, DEFAULTS.get(key, ""))))
             else:
                 field.setValue(values.get(key, 15))
         self.provider.setCurrentIndex(max(0, self.provider.findData(values.get("ai_provider"))))
@@ -304,8 +306,8 @@ class ManagerWindow(RemoteWindow):
         values = {key: field.text() if isinstance(field, QLineEdit) else field.value() for key, field in self.inputs.items()}
         values["ai_provider"] = self.provider.currentData()
         try:
-            first, second = parse_hotkey(values["toggle_hotkey"]), parse_hotkey(values["input_hotkey"])
-            if first == second or first[1] == 27 or second[1] == 27:
+            bindings = [parse_hotkey(value) for key, value in values.items() if key.endswith("_hotkey")]
+            if len(set(bindings)) != len(bindings) or any(value[1] == 27 for value in bindings):
                 raise ValueError("Клавиши должны отличаться друг от друга и от Esc")
         except ValueError as exc:
             self.error(str(exc))
@@ -650,6 +652,7 @@ class OverlayWindow(RemoteWindow):
             self.load_document(value["id"], value.get("post_id"), value.get("heading"))
 
     def load_document(self, ident, post_id=None, heading=None, restore_scroll=None):
+        self.requested_id = ident
         self.load_generation += 1
         generation = self.load_generation
 
@@ -764,9 +767,25 @@ class OverlayWindow(RemoteWindow):
             self.leave_input() if self.mode == "input" else self.enter_input()
         elif action == "escape" and self.isVisible():
             self.leave_input() if self.mode == "input" else self.hide_overlay()
+        elif self.isVisible() and action in {"prev_law", "next_law"}:
+            self.switch_law(1 if action == "next_law" else -1)
         elif self.isVisible() and action.startswith("scroll_"):
             bar = self.reader.verticalScrollBar()
             bar.setValue(bar.value() + (100 if action == "scroll_down" else -100))
+
+    def switch_law(self, direction):
+        ids = []
+        for index in range(self.law_list.count()):
+            ident = self.law_list.item(index).data(Qt.UserRole)["id"]
+            if ident not in ids:
+                ids.append(ident)
+        if not ids:
+            return
+        current = getattr(self, "requested_id", self.current_id)
+        index = ids.index(current) if current in ids else -1
+        target = ids[max(0, min(len(ids) - 1, index + direction))] if index >= 0 else ids[0]
+        if target != current:
+            self.load_document(target)
 
     def update_hotkey_scope(self):
         current = foreground()

@@ -87,6 +87,8 @@ class SettingsTest(unittest.TestCase):
                 self.assertEqual(settings.load_settings(True)["ai_api_key"], "replacement-key")
                 with self.assertRaises(ValueError):
                     settings.save_settings({"toggle_hotkey": "Ctrl+L", "input_hotkey": "Ctrl+L"})
+                with self.assertRaises(ValueError):
+                    settings.save_settings({"prev_law_hotkey": "Alt+Right", "next_law_hotkey": "Alt+Right"})
 
 
 class StoreTest(unittest.TestCase):

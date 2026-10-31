@@ -102,7 +102,10 @@ class Hotkeys(QAbstractNativeEventFilter):
         parsed = [(2000, "toggle", parse_hotkey(settings["toggle_hotkey"])),
                   (2001, "input", parse_hotkey(settings["input_hotkey"])),
                   (2002, "escape", (0x4000, 27)),
-                  (2003, "scroll_up", (0x4001, 38)), (2004, "scroll_down", (0x4001, 40))]
+                  (2003, "scroll_up", parse_hotkey(settings.get("scroll_up_hotkey", "Alt+Up"))),
+                  (2004, "scroll_down", parse_hotkey(settings.get("scroll_down_hotkey", "Alt+Down"))),
+                  (2005, "prev_law", parse_hotkey(settings.get("prev_law_hotkey", "Alt+Left"))),
+                  (2006, "next_law", parse_hotkey(settings.get("next_law_hotkey", "Alt+Right")))]
         if len({value for _, _, value in parsed}) != len(parsed):
             raise ValueError("Горячие клавиши совпадают")
         self.desired = parsed

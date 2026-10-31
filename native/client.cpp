@@ -1,4 +1,5 @@
 #include "rpc.h"
+#include "input_policy.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <dinput.h>
@@ -18,12 +19,15 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <sstream>
+#include <iomanip>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 namespace {
 enum class Mode { Hidden, View, Input };
-struct Binding { int key; bool ctrl, alt, shift, win = false; };
+using overlay_input::Binding;
+using overlay_input::ParseBinding;
 struct State {
     std::mutex mutex, queueMutex;
     std::condition_variable wake;
@@ -33,6 +37,10 @@ struct State {
     Json preferences = Json::object();
     std::shared_ptr<const Json> document;
     Binding toggle{'L', true, false, false}, input{'F', false, true, false};
+    Binding previousLaw{VK_LEFT, false, true, false}, nextLaw{VK_RIGHT, false, true, false};
+    Binding scrollUp{VK_UP, false, true, false}, scrollDown{VK_DOWN, false, true, false};
+    std::string selectedId;
+    unsigned documentGeneration = 0;
     bool searching = false, busy = false;
     bool preferencesLoaded = false;
     unsigned searchGeneration = 0;
@@ -50,6 +58,10 @@ using EndSceneFn = HRESULT(WINAPI*)(IDirect3DDevice9*);
 using ResetFn = HRESULT(WINAPI*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
 using DeviceStateFn = HRESULT(WINAPI*)(IDirectInputDevice8W*, DWORD, LPVOID);
 using DeviceDataFn = HRESULT(WINAPI*)(IDirectInputDevice8W*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
+using SetCursorPosFn = BOOL(WINAPI*)(int, int);
+using ClipCursorFn = BOOL(WINAPI*)(const RECT*);
+SetCursorPosFn originalSetCursorPos = nullptr;
+ClipCursorFn originalClipCursor = nullptr;
 EndSceneFn originalEnd = nullptr;
 ResetFn originalReset = nullptr;
 DeviceStateFn originalState = nullptr;
@@ -58,25 +70,52 @@ DeviceStateFn originalMouseState = nullptr;
 DeviceDataFn originalMouseData = nullptr;
 std::vector<void*> ownedHooks;
 
-void Status(const std::string& text) { std::lock_guard<std::mutex> lock(S().mutex); S().status = text; }
+std::wstring DataDirectory() {
+    wchar_t value[32768]{};
+    DWORD length = GetEnvironmentVariableW(L"AMAZING_OVERLAY_DATA", value, 32768);
+    if (length && length < 32768) return value;
+    length = GetEnvironmentVariableW(L"LOCALAPPDATA", value, 32768);
+    if (!length || length >= 32768) return L"";
+    std::wstring path = std::wstring(value) + L"\\AmazingLawOverlay";
+    CreateDirectoryW(path.c_str(), nullptr);
+    path += L"\\v2";
+    CreateDirectoryW(path.c_str(), nullptr);
+    return path;
+}
+
+void Log(const std::string& text) {
+    static auto* mutex = new std::mutex();
+    std::lock_guard<std::mutex> lock(*mutex);
+    auto directory = DataDirectory();
+    if (directory.empty()) return;
+    auto path = directory + L"\\native-client-" + std::to_wstring(GetCurrentProcessId()) + L".log";
+    HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME time{}; GetLocalTime(&time);
+    char stamp[64]{};
+    sprintf_s(stamp, "%04u-%02u-%02u %02u:%02u:%02u.%03u ", time.wYear, time.wMonth, time.wDay,
+              time.wHour, time.wMinute, time.wSecond, time.wMilliseconds);
+    std::string line = std::string(stamp) + text + "\r\n";
+    DWORD written = 0;
+    WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+    CloseHandle(file);
+}
+
+std::string HResult(HRESULT result) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << static_cast<unsigned long>(result);
+    return out.str();
+}
+
+void Status(const std::string& text) {
+    { std::lock_guard<std::mutex> lock(S().mutex); S().status = text; }
+    Log(text);
+}
 void Enqueue(std::function<void()> work) {
     auto& state = S();
     std::lock_guard<std::mutex> lock(state.queueMutex);
     if (state.queue.size() < 16) { state.queue.push_back(std::move(work)); state.wake.notify_one(); }
-}
-
-Binding ParseBinding(std::string value, Binding fallback) {
-    value.erase(std::remove(value.begin(), value.end(), ' '), value.end());
-    for (char& c : value) if (c >= 'a' && c <= 'z') c -= 32;
-    auto at = value.rfind('+');
-    auto key = at == std::string::npos ? value : value.substr(at + 1);
-    int code = 0;
-    if (key.size() == 1) code = key[0];
-    else if (key.size() > 1 && key[0] == 'F') {
-        try { int n = std::stoi(key.substr(1)); if (n >= 1 && n <= 24) code = VK_F1 + n - 1; } catch (...) {}
-    }
-    if (!code) return fallback;
-    return {code, value.find("CTRL+") != std::string::npos, value.find("ALT+") != std::string::npos, value.find("SHIFT+") != std::string::npos, value.find("WIN+") != std::string::npos};
 }
 
 bool Down(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
@@ -87,6 +126,7 @@ bool Pressed(const Binding& binding) {
 void SetMode(Mode next, bool restoreClip = true) {
     Mode old = mode.exchange(next);
     if (old == next) return;
+    Log(std::string("Mode: ") + (next == Mode::Input ? "input" : next == Mode::View ? "view" : "hidden"));
     if (next == Mode::Input) { GetClipCursor(&previousClip); ClipCursor(nullptr); }
     else if (old == Mode::Input && restoreClip && GetForegroundWindow() == gameWindow) ClipCursor(&previousClip);
     // Drain releases before sending game input again.
@@ -100,12 +140,19 @@ void SetMode(Mode next, bool restoreClip = true) {
 }
 
 void LoadDocument(std::string id) {
-    Enqueue([id] {
+    unsigned generation;
+    {
+        std::lock_guard<std::mutex> lock(S().mutex);
+        S().selectedId = id;
+        generation = ++S().documentGeneration;
+    }
+    Enqueue([id, generation] {
         auto result = Rpc("document", {{"id", id}});
         auto document = std::make_shared<const Json>(result.at("document"));
         Json preferences;
         {
             std::lock_guard<std::mutex> lock(S().mutex);
+            if (generation != S().documentGeneration) return;
             S().document = document;
             S().status = document->value("title", "");
             S().preferences["document"] = id;
@@ -170,6 +217,10 @@ void Refresh() {
             S().preferencesLoaded = true;
             S().toggle = ParseBinding(settings.value("toggle_hotkey", "Ctrl+L"), S().toggle);
             S().input = ParseBinding(settings.value("input_hotkey", "Alt+F"), S().input);
+            S().previousLaw = ParseBinding(settings.value("prev_law_hotkey", "Alt+Left"), S().previousLaw);
+            S().nextLaw = ParseBinding(settings.value("next_law_hotkey", "Alt+Right"), S().nextLaw);
+            S().scrollUp = ParseBinding(settings.value("scroll_up_hotkey", "Alt+Up"), S().scrollUp);
+            S().scrollDown = ParseBinding(settings.value("scroll_down_hotkey", "Alt+Down"), S().scrollDown);
             S().status = "Бэкенд подключён";
             if (!S().document && !documents.empty()) {
                 first = documents[0].value("id", "");
@@ -218,21 +269,38 @@ HRESULT WINAPI GetMouseData(IDirectInputDevice8W* device, DWORD size, LPDIDEVICE
     return result;
 }
 
+BOOL WINAPI CursorPosition(int x, int y) {
+    if (overlay_input::SuppressCursor(mode == Mode::Input, GetForegroundWindow() == gameWindow)) return TRUE;
+    return originalSetCursorPos(x, y);
+}
+
+BOOL WINAPI CursorClip(const RECT* rectangle) {
+    if (overlay_input::SuppressClip(mode == Mode::Input, GetForegroundWindow() == gameWindow, rectangle != nullptr)) return TRUE;
+    return originalClipCursor(rectangle);
+}
+
 void Draw() {
     static bool showList = false, showChat = false, previousToggle = false, previousInput = false, previousEscape = false;
     static char search[512]{}, question[8192]{};
     static std::string sentSearch;
     static ULONGLONG searchChanged = 0;
     static bool restored = false;
+    static bool previousLeft = false, previousRight = false;
+    static bool previousUp = false, previousDown = false;
+    static ULONGLONG lastScrollRepeat = 0;
+    static std::string renderedId;
     auto& state = S();
-    Binding toggle, input;
+    Binding toggle, input, previousLaw, nextLaw, scrollUp, scrollDown;
     Json documents, hits, sources;
-    std::string status, answer;
+    std::string status, answer, selectedId;
     bool busy, searching;
     std::shared_ptr<const Json> document;
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         toggle = state.toggle; input = state.input;
+        previousLaw = state.previousLaw; nextLaw = state.nextLaw;
+        scrollUp = state.scrollUp; scrollDown = state.scrollDown;
+        selectedId = state.selectedId;
         documents = state.documents; hits = state.hits; sources = state.sources;
         status = state.status; answer = state.answer; busy = state.busy; searching = state.searching; document = state.document;
         if (!restored && state.preferencesLoaded) {
@@ -247,6 +315,21 @@ void Draw() {
     if (i && !previousInput) SetMode(mode == Mode::Input ? Mode::View : Mode::Input);
     if (e && !previousEscape && mode != Mode::Hidden) SetMode(mode == Mode::Input ? Mode::View : Mode::Hidden);
     previousToggle = t; previousInput = i; previousEscape = e;
+    bool left = focused && Pressed(previousLaw), right = focused && Pressed(nextLaw);
+    bool up = focused && Pressed(scrollUp), down = focused && Pressed(scrollDown);
+    if (mode != Mode::Hidden && ((left && !previousLeft) || (right && !previousRight))) {
+        std::vector<std::string> ids;
+        for (const auto& item : searching ? hits : documents) ids.push_back(item.value(searching ? "doc_id" : "id", ""));
+        auto target = overlay_input::NextDocument(ids, selectedId, right && !previousRight ? 1 : -1);
+        if (!target.empty() && target != selectedId) LoadDocument(target);
+    }
+    float scrollDelta = 0;
+    const auto ticks = GetTickCount64();
+    if (mode != Mode::Hidden && (up || down) && ((!previousUp && up) || (!previousDown && down) || ticks - lastScrollRepeat >= 100)) {
+        scrollDelta = down ? 100.0f : -100.0f;
+        lastScrollRepeat = ticks;
+    }
+    previousLeft = left; previousRight = right; previousUp = up; previousDown = down;
     if (!focused && mode == Mode::Input) SetMode(Mode::View, false);
     if (mode == Mode::Hidden) return;
     if (mode == Mode::Input) ClipCursor(nullptr);
@@ -296,6 +379,9 @@ void Draw() {
     }
     float readerWidth = showChat ? std::max(240.0f, ImGui::GetContentRegionAvail().x - 350) : 0;
     ImGui::BeginChild("reader", ImVec2(readerWidth, -26), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    const auto docId = document ? document->value("id", "") : "";
+    if (docId != renderedId) { ImGui::SetScrollY(0); renderedId = docId; }
+    else if (scrollDelta) ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() + scrollDelta));
     if (document) DrawDocument(*document); else ImGui::TextWrapped("%s", status.c_str());
     ImGui::EndChild();
     if (showChat) {
@@ -335,6 +421,8 @@ void Draw() {
 }
 
 HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
+    static std::atomic<bool> first{true};
+    if (first.exchange(false)) Log("First EndScene callback received");
     if (!initialized) {
         D3DDEVICE_CREATION_PARAMETERS parameters{};
         if (FAILED(device->GetCreationParameters(&parameters)) || !parameters.hFocusWindow) return originalEnd(device);
@@ -376,6 +464,7 @@ HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
             return originalEnd(device);
         }
         initialized = true;
+        Log("Renderer initialized; Ctrl+L shows panel; Alt+F enables input");
     }
     if (device == activeDevice) {
         try {
@@ -403,14 +492,18 @@ bool Hook(void* target, void* replacement, void** original) {
 }
 
 DWORD WINAPI Bootstrap(void*) {
+    Log("Bootstrap entered; build " __DATE__ " " __TIME__ "; x86 D3D9 client");
     // Pin before installing callbacks: unloading a hooked module is unsafe.
     HMODULE pinned = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                       reinterpret_cast<LPCWSTR>(&Bootstrap), &pinned);
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                            reinterpret_cast<LPCWSTR>(&Bootstrap), &pinned)) {
+        Log("Module is not registered with the Windows loader (Manual Map); caller must keep it mapped while callbacks are installed");
+    }
     HINSTANCE module = GetModuleHandleW(nullptr);
     WNDCLASSW klass{}; klass.lpfnWndProc = DefWindowProcW; klass.hInstance = module; klass.lpszClassName = L"AmazingOverlayProbe";
     RegisterClassW(&klass);
-    HWND probe = CreateWindowW(klass.lpszClassName, L"", WS_OVERLAPPED, 0, 0, 16, 16, nullptr, nullptr, module, nullptr);
+    HWND probe = CreateWindowW(klass.lpszClassName, L"", WS_OVERLAPPED, 0, 0, 64, 64, nullptr, nullptr, module, nullptr);
+    if (!probe) Log("ERROR: CreateWindow probe failed, Win32=" + std::to_string(GetLastError()));
     auto* d3d = Direct3DCreate9(D3D_SDK_VERSION);
     IDirect3DDevice9* device = nullptr;
     D3DPRESENT_PARAMETERS parameters{}; parameters.Windowed = TRUE; parameters.SwapEffect = D3DSWAPEFFECT_DISCARD; parameters.hDeviceWindow = probe;
@@ -427,43 +520,60 @@ DWORD WINAPI Bootstrap(void*) {
             Status("Hooking EndScene / Reset");
             success = Hook(table[42], reinterpret_cast<void*>(EndScene), reinterpret_cast<void**>(&originalEnd)) &&
                       Hook(table[16], reinterpret_cast<void*>(Reset), reinterpret_cast<void**>(&originalReset));
+            if (success) {
+                Status("Hooking game cursor recenter / clip");
+                auto user32 = GetModuleHandleW(L"user32.dll");
+                success = user32 && Hook(reinterpret_cast<void*>(GetProcAddress(user32, "SetCursorPos")), reinterpret_cast<void*>(CursorPosition), reinterpret_cast<void**>(&originalSetCursorPos)) &&
+                          Hook(reinterpret_cast<void*>(GetProcAddress(user32, "ClipCursor")), reinterpret_cast<void*>(CursorClip), reinterpret_cast<void**>(&originalClipCursor));
+            }
             IDirectInput8W* input = nullptr;
             IDirectInputDevice8W* keyboard = nullptr;
             IDirectInputDevice8W* mouse = nullptr;
             if (success) Status("Creating DirectInput probe keyboard");
-            if (success && SUCCEEDED(DirectInput8Create(module, DIRECTINPUT_VERSION, IID_IDirectInput8W, reinterpret_cast<void**>(&input), nullptr)) &&
-                SUCCEEDED(input->CreateDevice(GUID_SysKeyboard, &keyboard, nullptr))) {
+            HRESULT inputResult = success ? DirectInput8Create(module, DIRECTINPUT_VERSION, IID_IDirectInput8W, reinterpret_cast<void**>(&input), nullptr) : E_FAIL;
+            HRESULT keyboardResult = SUCCEEDED(inputResult) ? input->CreateDevice(GUID_SysKeyboard, &keyboard, nullptr) : inputResult;
+            if (success && SUCCEEDED(keyboardResult)) {
                 Status("Hooking DirectInput state / buffered data");
                 auto** keys = *reinterpret_cast<void***>(keyboard);
                 success = Hook(keys[9], reinterpret_cast<void*>(GetState), reinterpret_cast<void**>(&originalState)) &&
                           Hook(keys[10], reinterpret_cast<void*>(GetData), reinterpret_cast<void**>(&originalData));
-                if (success && SUCCEEDED(input->CreateDevice(GUID_SysMouse, &mouse, nullptr))) {
+                HRESULT mouseResult = success ? input->CreateDevice(GUID_SysMouse, &mouse, nullptr) : E_FAIL;
+                if (success && SUCCEEDED(mouseResult)) {
                     auto** mouseTable = *reinterpret_cast<void***>(mouse);
                     if (mouseTable[9] != keys[9]) success = Hook(mouseTable[9], reinterpret_cast<void*>(GetMouseState), reinterpret_cast<void**>(&originalMouseState));
                     if (success && mouseTable[10] != keys[10]) success = Hook(mouseTable[10], reinterpret_cast<void*>(GetMouseData), reinterpret_cast<void**>(&originalMouseData));
-                } else success = false;
-            } else success = false;
+                } else { if (success) Log("ERROR: CreateDevice mouse " + HResult(mouseResult)); success = false; }
+            } else { if (success) Log("ERROR: CreateDevice keyboard " + HResult(keyboardResult)); success = false; }
             if (keyboard) keyboard->Release();
             if (mouse) mouse->Release();
             if (input) input->Release();
         } else Status(std::string("MH_Initialize: ") + MH_StatusToString(hookInit));
-    } else Status("D3D9 probe creation HRESULT=" + std::to_string(static_cast<unsigned long>(creation)));
+    } else Status("ERROR: D3D9 probe creation " + HResult(creation) + "; windowed probe can be unavailable while a game owns exclusive fullscreen");
     if (device) device->Release();
     if (d3d) d3d->Release();
     if (probe) DestroyWindow(probe);
     UnregisterClassW(klass.lpszClassName, module);
     if (success) {
         Status("Enabling owned hooks");
-        for (void* target : ownedHooks) if (MH_QueueEnableHook(target) != MH_OK) success = false;
-        if (success) success = MH_ApplyQueued() == MH_OK;
+        for (void* target : ownedHooks) {
+            auto queued = MH_QueueEnableHook(target);
+            if (queued != MH_OK) { Log(std::string("ERROR: MH_QueueEnableHook ") + MH_StatusToString(queued)); success = false; }
+        }
+        if (success) {
+            auto applied = MH_ApplyQueued();
+            success = applied == MH_OK;
+            if (!success) Log(std::string("ERROR: MH_ApplyQueued ") + MH_StatusToString(applied));
+        }
     }
     if (!success) {
         for (void* target : ownedHooks) { MH_DisableHook(target); MH_RemoveHook(target); }
         OutputDebugStringW(L"AmazingLawClient: initialization failed; owned hooks removed.\n");
+        Log("Initialization FAILED; only this client's hooks removed");
         return 1;
     }
     std::thread(IoThread).detach();
     Refresh();
+    Log("Initialization complete; waiting for game render callback and backend");
     return 0;
 }
 }

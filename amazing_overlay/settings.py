@@ -13,7 +13,8 @@ DATA = Path(os.getenv("AMAZING_OVERLAY_DATA", str(Path(os.getenv("LOCALAPPDATA",
 PIPE_NAME = os.getenv("AMAZING_OVERLAY_PIPE", "amazing-law-overlay-v2")
 DEFAULTS = {"ai_provider": "openai", "ai_base_url": "https://openrouter.ai/api/v1", "ai_model": "openrouter/free",
             "max_tokens": 1500, "context_chars": 32000, "font_size": 15, "opacity": 0.96,
-            "toggle_hotkey": "Ctrl+L", "input_hotkey": "Alt+F"}
+            "toggle_hotkey": "Ctrl+L", "input_hotkey": "Alt+F", "prev_law_hotkey": "Alt+Left",
+            "next_law_hotkey": "Alt+Right", "scroll_up_hotkey": "Alt+Up", "scroll_down_hotkey": "Alt+Down"}
 
 
 def atomic_json(path: Path, value):
@@ -34,7 +35,8 @@ def load_settings(private=False) -> dict:
         if path.exists():
             loaded = json.loads(path.read_text(encoding="utf-8"))
             if path == ROOT / "config.json":
-                for old, new in (("toggle", "toggle_hotkey"), ("search", "input_hotkey")):
+                for old, new in (("toggle", "toggle_hotkey"), ("search", "input_hotkey"), ("prev_law", "prev_law_hotkey"),
+                                 ("next_law", "next_law_hotkey"), ("scroll_up", "scroll_up_hotkey"), ("scroll_down", "scroll_down_hotkey")):
                     hotkey = loaded.get("hotkeys", {}).get(old)
                     if hotkey:
                         value[new] = "+".join([*hotkey.get("modifiers", []), hotkey["key"]])
@@ -65,8 +67,8 @@ def save_settings(values: dict):
         current[key] = max(low, min(high, int(current[key])))
     current["opacity"] = max(0.4, min(1.0, float(current["opacity"])))
     from .win32 import parse_hotkey
-    first, second = parse_hotkey(current["toggle_hotkey"]), parse_hotkey(current["input_hotkey"])
-    if first == second or first[1] == 27 or second[1] == 27:
+    bindings = [parse_hotkey(current[key]) for key in DEFAULTS if key.endswith("_hotkey")]
+    if len(set(bindings)) != len(bindings) or any(value[1] == 27 for value in bindings):
         raise ValueError("Горячие клавиши должны различаться и не занимать Esc")
     for key in ("has_api_key", "env_overrides", "ai_api_key"):
         current.pop(key, None)

@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: cmake -S native -B native/out -A Win32
       - run: cmake --build native/out --config Release
+      - run: ctest --test-dir native/out -C Release --output-on-failure
       - uses: actions/upload-artifact@v4
         with:
           name: AmazingLawClient-x86
