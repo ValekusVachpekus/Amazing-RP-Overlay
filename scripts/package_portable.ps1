@@ -10,11 +10,15 @@ foreach ($clientMode in @('manager', 'overlay', 'backend', 'install-browser')) {
     $batchText = "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" AmazingLawOverlay.exe $clientMode`r`n"
     [System.IO.File]::WriteAllText((Join-Path $bundleDirectory "start_$clientMode.bat"), $batchText)
 }
-$nativeDirectory = Join-Path $projectRoot 'native/out/Release'
-if (-not (Test-Path -LiteralPath (Join-Path $nativeDirectory 'AmazingLawClient.dll'))) {
-    $nativeDirectory = Join-Path $projectRoot 'native/out-local'
-}
+$nativeCandidates = @(
+    (Join-Path $projectRoot 'dist/native-latest/AmazingLawClient.dll'),
+    (Join-Path $projectRoot 'native/out/Release/AmazingLawClient.dll'),
+    (Join-Path $projectRoot 'native/out-local/AmazingLawClient.dll')
+) | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-Item -LiteralPath $_ }
+$newestNative = $nativeCandidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$nativeDirectory = if ($newestNative) { $newestNative.DirectoryName } else { '' }
 foreach ($artifactName in @('AmazingLawClient.dll', 'AmazingLawClient.asi')) {
+    if (-not $nativeDirectory) { continue }
     $artifactPath = Join-Path $nativeDirectory $artifactName
     if (Test-Path -LiteralPath $artifactPath) {
         Copy-Item -LiteralPath $artifactPath -Destination $bundleDirectory

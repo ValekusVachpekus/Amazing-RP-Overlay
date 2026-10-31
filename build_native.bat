@@ -11,6 +11,8 @@ cmake -S native -B native/out -G "Visual Studio 17 2022" -A Win32
 if errorlevel 1 goto :error
 cmake --build native/out --config Release
 if errorlevel 1 goto :error
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sync_native_artifacts.ps1 -NativeDirectory "%~dp0native\out\Release"
+if errorlevel 1 goto :error
 echo Built native\out\Release\AmazingLawClient.dll and .asi
 exit /b 0
 :error

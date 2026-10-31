@@ -19,3 +19,4 @@ $buildDirectory = Join-Path $projectRoot 'native/out-local'
 if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed.' }
 & cmake --build $buildDirectory --config Release
 if ($LASTEXITCODE -ne 0) { throw 'Native build failed.' }
+& (Join-Path $PSScriptRoot 'sync_native_artifacts.ps1') -NativeDirectory $buildDirectory
