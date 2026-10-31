@@ -1,5 +1,6 @@
 #include "rpc.h"
 #include "input_policy.h"
+#include "display_text.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <dinput.h>
@@ -402,13 +403,7 @@ void Draw() {
             auto id = item.value(searching ? "doc_id" : "id", "");
             if (std::find(shown.begin(), shown.end(), id) != shown.end()) continue;
             shown.push_back(id);
-            auto label = item.value("title", "");
-            for (const std::string prefix : {"ЗАКРЕПЛЕНО", "ИНФОРМАЦИЯ"}) {
-                if (label.rfind(prefix, 0) == 0) label.erase(0, prefix.size());
-            }
-            const auto first = label.find_first_not_of(" \r\n\t");
-            if (first != std::string::npos) label.erase(0, first);
-            if (label.empty()) label = "Без названия";
+            auto label = LawDisplayTitle(item.value("title", ""));
             ImGui::PushID(id.c_str());
             const float width = ImGui::GetContentRegionAvail().x;
             const float height = std::max(58.0f, ImGui::CalcTextSize(label.c_str(), nullptr, false, width - 26).y + 24);
@@ -435,7 +430,7 @@ void Draw() {
     else if (scrollDelta) ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() + scrollDelta));
     if (document) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.64f, .82f, .94f, 1));
-        auto title = document->value("title", "Закон");
+        auto title = LawDisplayTitle(document->value("title", "Закон"));
         ImGui::TextWrapped("%s", title.c_str());
         ImGui::PopStyleColor();
         ImGui::Separator(); ImGui::Spacing();

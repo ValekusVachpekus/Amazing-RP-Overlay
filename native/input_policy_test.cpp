@@ -1,8 +1,12 @@
 #include "input_policy.h"
 #include "text_search.h"
+#include "display_text.h"
 #include <iostream>
 
 int main() {
+    if (LawDisplayTitle("ЗАКРЕПЛЕНО\n\xC2\xA0\nТрудовой кодекс") != "Трудовой кодекс") return 12;
+    if (LawDisplayTitle("\xEF\xBB\xBF ИНФОРМАЦИЯ\n\xE2\x80\x8B\nЗакон\tоб оружии ") != "Закон об оружии") return 13;
+    if (LawDisplayTitle(" \n\xC2\xA0 ") != "Без названия") return 14;
     using reader_search::Matches;
     if (Matches("Статья СТАТЬЯ статья", "статья").size() != 3) return 8;
     if (Matches("Ёж ёж ЕЖ", "ёж").size() != 2) return 9;
