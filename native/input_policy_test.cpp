@@ -1,7 +1,14 @@
 #include "input_policy.h"
+#include "text_search.h"
 #include <iostream>
 
 int main() {
+    using reader_search::Matches;
+    if (Matches("Статья СТАТЬЯ статья", "статья").size() != 3) return 8;
+    if (Matches("Ёж ёж ЕЖ", "ёж").size() != 2) return 9;
+    const auto match = Matches("xx Закон yy", "закон");
+    if (match.size() != 1 || match[0].first != 3 || match[0].second != 13) return 10;
+    if (!Matches("text", "").empty() || Matches("aaa", "aa").size() != 1) return 11;
     using namespace overlay_input;
     // Capture only while interacting with the game; Alt+Tab and view restore OS behavior.
     if (!SuppressCursor(true, true) || SuppressCursor(true, false) || SuppressCursor(false, true)) return 1;

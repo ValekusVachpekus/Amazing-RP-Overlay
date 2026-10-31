@@ -2,6 +2,33 @@
 #include <windows.h>
 #include <d3d9.h>
 #include <fstream>
+#include <vector>
+
+void Capture(IDirect3DDevice9* device) {
+    wchar_t path[32768]{};
+    if (!GetEnvironmentVariableW(L"AMAZING_OVERLAY_CAPTURE", path, 32768)) return;
+    IDirect3DSurface9 *back = nullptr, *copy = nullptr;
+    if (FAILED(device->GetRenderTarget(0, &back))) return;
+    D3DSURFACE_DESC desc{}; back->GetDesc(&desc);
+    if (SUCCEEDED(device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr)) &&
+        SUCCEEDED(device->GetRenderTargetData(back, copy))) {
+        D3DLOCKED_RECT pixels{};
+        if (SUCCEEDED(copy->LockRect(&pixels, nullptr, D3DLOCK_READONLY))) {
+            BITMAPFILEHEADER file{}; BITMAPINFOHEADER info{};
+            file.bfType = 0x4d42; file.bfOffBits = sizeof(file) + sizeof(info);
+            file.bfSize = file.bfOffBits + desc.Width * desc.Height * 4;
+            info.biSize = sizeof(info); info.biWidth = desc.Width; info.biHeight = -static_cast<LONG>(desc.Height);
+            info.biPlanes = 1; info.biBitCount = 32; info.biCompression = BI_RGB;
+            std::ofstream output(path, std::ios::binary);
+            output.write(reinterpret_cast<char*>(&file), sizeof(file)); output.write(reinterpret_cast<char*>(&info), sizeof(info));
+            for (UINT row = 0; row < desc.Height; ++row)
+                output.write(static_cast<char*>(pixels.pBits) + row * pixels.Pitch, desc.Width * 4);
+            copy->UnlockRect();
+        }
+    }
+    if (copy) copy->Release();
+    back->Release();
+}
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
@@ -36,6 +63,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); continue; }
         device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(15, 23, 42), 1, 0);
         if (SUCCEEDED(device->BeginScene())) device->EndScene();
+        if (selfTest && frames >= 249 && probe() == 3u) Capture(device);
         device->Present(nullptr, nullptr, nullptr, nullptr);
         if (selfTest) {
             if (probe() & 1u) show();

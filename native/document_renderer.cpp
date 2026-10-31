@@ -1,12 +1,59 @@
 #include "rpc.h"
+#include "text_search.h"
 #include <imgui.h>
 #include <algorithm>
 #include <functional>
 #include <string>
 #include <sstream>
 #include <vector>
+#include <unordered_map>
 
 namespace {
+DocumentSearch* currentSearch = nullptr;
+std::unordered_map<std::string, std::vector<std::pair<size_t, size_t>>> matchCache;
+const std::vector<std::pair<size_t, size_t>>& CachedMatches(const std::string& text) {
+    const auto found = matchCache.find(text);
+    if (found != matchCache.end()) return found->second;
+    return matchCache.emplace(text, reader_search::Matches(text, currentSearch ? currentSearch->query : "")).first->second;
+}
+
+// Draw each wrapped line once, with match rectangles underneath the glyphs.
+// Byte offsets remain those of the original UTF-8 text, including Cyrillic.
+float RichText(const std::string& text, ImVec2 origin, float width, ImU32 color) {
+    const auto& matches = CachedMatches(text);
+    const int first = currentSearch ? currentSearch->cursor : 0;
+    if (currentSearch) currentSearch->cursor += static_cast<int>(matches.size());
+    auto* font = ImGui::GetFont();
+    auto* draw = ImGui::GetWindowDrawList();
+    const float size = ImGui::GetFontSize(), height = ImGui::GetTextLineHeight() + 3;
+    const char* begin = text.c_str();
+    const char* end = begin + text.size();
+    const char* line = begin;
+    float y = origin.y;
+    while (line < end) {
+        const char* newline = std::find(line, end, '\n');
+        const char* stop = font->CalcWordWrapPositionA(size / font->FontSize, line, newline, std::max(20.0f, width));
+        if (stop == line && stop < newline) { ++stop; while (stop < newline && (static_cast<unsigned char>(*stop) & 0xc0) == 0x80) ++stop; }
+        for (size_t i = 0; i < matches.size(); ++i) {
+            const auto from = std::max(matches[i].first, static_cast<size_t>(line - begin));
+            const auto to = std::min(matches[i].second, static_cast<size_t>(stop - begin));
+            if (from >= to) continue;
+            float x1 = ImGui::CalcTextSize(line, begin + from).x;
+            float x2 = ImGui::CalcTextSize(line, begin + to).x;
+            bool active = currentSearch && first + static_cast<int>(i) == currentSearch->active;
+            draw->AddRectFilled(ImVec2(origin.x + x1, y), ImVec2(origin.x + x2, y + size + 2),
+                active ? IM_COL32(188, 116, 25, 255) : IM_COL32(96, 79, 29, 255), 2);
+            if (active && currentSearch->jump && from == matches[i].first) ImGui::SetScrollFromPosY(y - ImGui::GetWindowPos().y, .35f);
+        }
+        draw->AddText(ImVec2(origin.x, y), color, line, stop);
+        y += height;
+        line = stop;
+        if (line == newline && line < end) ++line;
+        else while (line < newline && (*line == ' ' || *line == '\t')) ++line;
+    }
+    return std::max(height, y - origin.y);
+}
+
 const Json& Children(const Json& node) {
     static const Json empty = Json::array();
     const auto at = node.find("children");
@@ -82,15 +129,22 @@ void Table(const Json& table) {
         }
     }
     if (!columns) return;
-    const float width = std::max(170.0f, std::min(260.0f, ImGui::GetContentRegionAvail().x / columns));
+    const float width = std::max(170.0f, std::min(260.0f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().WindowPadding.x * 2 - 4) / columns));
     std::vector<float> heights(rows.size(), ImGui::GetTextLineHeight() + 16);
     for (const auto& cell : cells) {
-        float need = ImGui::CalcTextSize(cell.text.c_str(), nullptr, false, width * cell.colspan - 16).y + 16;
+        float textHeight = ImGui::CalcTextSize(cell.text.c_str(), nullptr, false, width * cell.colspan - 16).y;
+        float need = textHeight * (ImGui::GetTextLineHeight() + 3) / ImGui::GetTextLineHeight() + 16;
         for (int r = cell.row; r < cell.row + cell.rowspan; ++r) heights[r] = std::max(heights[r], need / cell.rowspan);
     }
     std::vector<float> offsets{0};
     for (float height : heights) offsets.push_back(offsets.back() + height);
-    float childHeight = std::min(500.0f, offsets.back() + 26);
+    float childHeight = std::min(500.0f, offsets.back() + ImGui::GetStyle().WindowPadding.y * 2 + ImGui::GetStyle().ScrollbarSize + 4);
+    if (currentSearch && currentSearch->jump) {
+        int count = 0;
+        for (const auto& cell : cells) count += static_cast<int>(CachedMatches(cell.text).size());
+        if (currentSearch->active >= currentSearch->cursor && currentSearch->active < currentSearch->cursor + count)
+            ImGui::SetScrollFromPosY(ImGui::GetCursorPosY(), .25f);
+    }
     ImGui::PushID(&table);
     ImGui::BeginChild("table", ImVec2(0, childHeight), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
     const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -101,7 +155,7 @@ void Table(const Json& table) {
         draw->AddRectFilled(from, to, cell.heading ? IM_COL32(36, 55, 78, 255) : IM_COL32(22, 32, 47, 255));
         draw->AddRect(from, to, IM_COL32(86, 108, 137, 255));
         draw->PushClipRect(from, to, true);
-        draw->AddText(nullptr, 0, ImVec2(from.x + 8, from.y + 8), IM_COL32(226, 232, 240, 255), cell.text.c_str(), nullptr, width * cell.colspan - 16);
+        RichText(cell.text, ImVec2(from.x + 8, from.y + 8), width * cell.colspan - 16, IM_COL32(226, 232, 240, 255));
         draw->PopClipRect();
     }
     ImGui::Dummy(ImVec2(width * columns, offsets.back()));
@@ -126,16 +180,29 @@ void Node(const Json& node) {
     bool heading = tag.size() == 2 && tag[0] == 'h';
     if (heading) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.58f, .78f, 1, 1));
     if (tag == "li") ImGui::Bullet();
-    ImGui::TextWrapped("%s", text.c_str());
+    const auto origin = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    float height = RichText(text, origin, width, ImGui::GetColorU32(ImGuiCol_Text));
+    ImGui::Dummy(ImVec2(width, height));
     if (heading) { ImGui::PopStyleColor(); ImGui::Spacing(); }
 }
 }
 
-void DrawDocument(const Json& document) {
+void DrawDocument(const Json& document, DocumentSearch* search) {
+    static const Json* previousDocument = nullptr;
+    static std::string previousQuery;
+    const std::string query = search ? search->query : "";
+    if (previousDocument != &document || previousQuery != query) {
+        matchCache.clear(); previousDocument = &document; previousQuery = query;
+    }
+    currentSearch = search;
+    if (search) search->cursor = 0;
     if (!document.contains("posts")) return;
     for (const auto& post : document.at("posts")) {
         ImGui::PushID(post.value("post_id", "").c_str());
         for (const auto& node : post.at("blocks")) Node(node);
         ImGui::PopID();
     }
+    if (search) { search->total = search->cursor; search->jump = false; }
+    currentSearch = nullptr;
 }

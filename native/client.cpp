@@ -283,6 +283,8 @@ void Draw() {
     static bool showList = false, showChat = false, previousToggle = false, previousInput = false, previousEscape = false;
     static char search[512]{}, question[8192]{};
     static std::string sentSearch;
+    static DocumentSearch readerSearch;
+    static bool previousFindNext = false;
     static ULONGLONG searchChanged = 0;
     static bool restored = false;
     static bool previousLeft = false, previousRight = false;
@@ -333,7 +335,8 @@ void Draw() {
     if (!focused && mode == Mode::Input) SetMode(Mode::View, false);
     if (mode == Mode::Hidden) return;
     if (mode == Mode::Input) ClipCursor(nullptr);
-    ImGui::SetNextWindowSize(ImVec2(650, 520), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(620, 400), ImVec2(3000, 2000));
+    ImGui::SetNextWindowSize(ImVec2(1100, 720), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(60, 80), ImGuiCond_FirstUseEver);
     ImGuiWindowFlags flags = mode == Mode::Input ? 0 : ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove;
     ImGui::Begin("AMAZING / ЗАКОНЫ", nullptr, flags);
@@ -345,12 +348,36 @@ void Draw() {
             Rpc("state_set", {{"key", "native"}, {"value", prefs}});
         });
     };
-    if (ImGui::Button("Список")) { showList = !showList; savePanels(); }
-    ImGui::SameLine(); if (ImGui::Button("Чат")) { showChat = !showChat; savePanels(); }
-    ImGui::SameLine(); if (ImGui::Button("Обновить")) Refresh();
-    ImGui::SameLine(); if (ImGui::Button("Скрыть")) SetMode(Mode::Hidden);
+    if (ImGui::Button(showList ? "Законы: открыты" : "Законы", ImVec2(160, 36))) { showList = !showList; savePanels(); }
+    ImGui::SameLine(); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145, 36))) { showChat = !showChat; savePanels(); }
+    ImGui::SameLine(); if (ImGui::Button("Обновить", ImVec2(110, 36))) Refresh();
+    ImGui::SameLine(); if (ImGui::Button("Скрыть", ImVec2(95, 36))) SetMode(Mode::Hidden);
     ImGui::TextDisabled("%s", mode == Mode::Input ? "Ввод / Esc: просмотр" : "Просмотр / Alt+F: ввод");
-    if (ImGui::InputTextWithHint("##search", "Поиск по всей базе…", search, sizeof(search))) searchChanged = GetTickCount64();
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(std::max(150.0f, ImGui::GetContentRegionAvail().x - 285));
+    if (ImGui::InputTextWithHint("##search", "Найти в законах…", search, sizeof(search))) searchChanged = GetTickCount64();
+    const bool searchFocused = ImGui::IsItemActive();
+    if (readerSearch.query != search) {
+        readerSearch.query = search; readerSearch.active = 0; readerSearch.total = 0; readerSearch.jump = true;
+    }
+    auto stepMatch = [&](int delta) {
+        if (readerSearch.total) readerSearch.active = (readerSearch.active + delta + readerSearch.total) % readerSearch.total;
+        readerSearch.jump = true;
+    };
+    ImGui::SameLine();
+    if (ImGui::Button("<##match", ImVec2(38, 0))) stepMatch(-1);
+    ImGui::SameLine();
+    if (ImGui::Button(">##match", ImVec2(38, 0))) stepMatch(1);
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d / %d", readerSearch.total ? readerSearch.active + 1 : 0, readerSearch.total);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Совпадения в открытом законе. F3 / Shift+F3; Enter в поиске.");
+    ImGui::SameLine();
+    if (ImGui::Button("Сброс")) { search[0] = 0; searchChanged = GetTickCount64(); }
+    bool findNext = focused && (Down(VK_F3) || (searchFocused && Down(VK_RETURN)));
+    bool findBack = findNext && Down(VK_SHIFT);
+    if (findNext && !previousFindNext) stepMatch(findBack ? -1 : 1);
+    previousFindNext = findNext;
+    ImGui::Spacing();
     if (sentSearch != search && GetTickCount64() - searchChanged >= 150) {
         std::string query(search);
         sentSearch = query;
@@ -364,25 +391,56 @@ void Draw() {
         if (!query.empty()) showList = true;
     }
     if (showList) {
-        ImGui::BeginChild("laws", ImVec2(240, -26), ImGuiChildFlags_Borders);
+        const float listWidth = std::clamp(ImGui::GetContentRegionAvail().x * .27f, 220.0f, 340.0f);
+        ImGui::BeginChild("laws", ImVec2(listWidth, -30), ImGuiChildFlags_Borders);
+        ImGui::TextDisabled(searching ? "РЕЗУЛЬТАТЫ ПОИСКА" : "БИБЛИОТЕКА ЗАКОНОВ");
+        ImGui::Separator();
         const auto& listing = searching ? hits : documents;
+        std::vector<std::string> shown;
         for (size_t index = 0; index < listing.size(); ++index) {
             const auto& item = listing[index];
             auto id = item.value(searching ? "doc_id" : "id", "");
-            auto label = item.value("title", "") + (searching ? "\n" + item.value("heading", "") : "");
-            ImGui::PushID(static_cast<int>(index));
-            if (ImGui::Selectable(label.c_str(), document && document->value("id", "") == id)) LoadDocument(id);
+            if (std::find(shown.begin(), shown.end(), id) != shown.end()) continue;
+            shown.push_back(id);
+            auto label = item.value("title", "");
+            for (const std::string prefix : {"ЗАКРЕПЛЕНО", "ИНФОРМАЦИЯ"}) {
+                if (label.rfind(prefix, 0) == 0) label.erase(0, prefix.size());
+            }
+            const auto first = label.find_first_not_of(" \r\n\t");
+            if (first != std::string::npos) label.erase(0, first);
+            if (label.empty()) label = "Без названия";
+            ImGui::PushID(id.c_str());
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float height = std::max(58.0f, ImGui::CalcTextSize(label.c_str(), nullptr, false, width - 26).y + 24);
+            const auto pos = ImGui::GetCursorScreenPos();
+            const bool selected = document && document->value("id", "") == id;
+            if (ImGui::InvisibleButton("law", ImVec2(width, height))) LoadDocument(id);
+            const bool hovered = ImGui::IsItemHovered();
+            auto* draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
+                selected ? IM_COL32(35, 64, 91, 255) : hovered ? IM_COL32(31, 44, 61, 255) : IM_COL32(23, 32, 45, 255), 7);
+            if (selected) draw->AddRectFilled(pos, ImVec2(pos.x + 3, pos.y + height), IM_COL32(95, 184, 229, 255), 2);
+            draw->AddText(nullptr, 0, ImVec2(pos.x + 13, pos.y + 12), IM_COL32(228, 235, 244, 255), label.c_str(), nullptr, width - 26);
+            if (hovered) ImGui::SetTooltip("%s", label.c_str());
             ImGui::PopID();
         }
+        if (shown.empty()) ImGui::TextWrapped("Ничего не найдено. Попробуйте другое слово.");
         ImGui::EndChild();
         ImGui::SameLine();
     }
     float readerWidth = showChat ? std::max(240.0f, ImGui::GetContentRegionAvail().x - 350) : 0;
     ImGui::BeginChild("reader", ImVec2(readerWidth, -26), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
     const auto docId = document ? document->value("id", "") : "";
-    if (docId != renderedId) { ImGui::SetScrollY(0); renderedId = docId; }
+    if (docId != renderedId) { ImGui::SetScrollY(0); renderedId = docId; readerSearch.active = 0; readerSearch.jump = true; }
     else if (scrollDelta) ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() + scrollDelta));
-    if (document) DrawDocument(*document); else ImGui::TextWrapped("%s", status.c_str());
+    if (document) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.64f, .82f, .94f, 1));
+        auto title = document->value("title", "Закон");
+        ImGui::TextWrapped("%s", title.c_str());
+        ImGui::PopStyleColor();
+        ImGui::Separator(); ImGui::Spacing();
+        DrawDocument(*document, &readerSearch);
+    } else ImGui::TextWrapped("%s", status.c_str());
     ImGui::EndChild();
     if (showChat) {
         ImGui::SameLine();
@@ -454,7 +512,19 @@ HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
         WideCharToMultiByte(CP_UTF8, 0, fontPath.c_str(), -1, utf8.data(), needed, nullptr, nullptr);
         io.Fonts->AddFontFromFileTTF(utf8.c_str(), 17, nullptr, io.Fonts->GetGlyphRangesCyrillic());
         ImGui::StyleColorsDark();
-        ImGui::GetStyle().WindowRounding = 9;
+        auto& style = ImGui::GetStyle();
+        style.WindowRounding = 10; style.ChildRounding = 8; style.FrameRounding = 6;
+        style.GrabRounding = 5; style.ScrollbarRounding = 6;
+        style.WindowPadding = ImVec2(14, 12); style.FramePadding = ImVec2(12, 8);
+        style.ItemSpacing = ImVec2(10, 8); style.ScrollbarSize = 13;
+        style.Colors[ImGuiCol_WindowBg] = ImVec4(.045f, .065f, .095f, .97f);
+        style.Colors[ImGuiCol_ChildBg] = ImVec4(.06f, .085f, .12f, 1);
+        style.Colors[ImGuiCol_TitleBg] = style.Colors[ImGuiCol_TitleBgActive] = ImVec4(.08f, .14f, .21f, 1);
+        style.Colors[ImGuiCol_Button] = ImVec4(.13f, .22f, .31f, 1);
+        style.Colors[ImGuiCol_ButtonHovered] = ImVec4(.19f, .34f, .46f, 1);
+        style.Colors[ImGuiCol_FrameBg] = ImVec4(.10f, .15f, .22f, 1);
+        style.Colors[ImGuiCol_Border] = ImVec4(.19f, .26f, .34f, .7f);
+        style.Colors[ImGuiCol_Text] = ImVec4(.88f, .92f, .96f, 1);
         ImGui_ImplWin32_Init(gameWindow);
         ImGui_ImplDX9_Init(device);
         previousProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(gameWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WindowProc)));
