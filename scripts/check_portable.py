@@ -40,6 +40,20 @@ def main():
             rpc("state_set", {"key": "portable-test", "value": "работает"})
             assert rpc("state_get", {"key": "portable-test"}) == "работает"
             print("PORTABLE BACKEND: PASS; no local laws or credentials bundled")
+            if "--settings-check" in sys.argv:
+                assert health.get("native_settings"), "Update the backend for in-game settings"
+                saved = rpc("settings_save", {"opacity": .3, "font_size": 26, "theme": "light", "animations": False})
+                assert (saved["opacity"], saved["font_size"], saved["theme"], saved["animations"]) == (.3, 26, "light", False)
+                job = rpc("ai_test", {"ai_model": "unsaved-portable-test"})["job_id"]
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    status = rpc("job_status", {"id": job})
+                    if status["state"] != "running":
+                        break
+                    time.sleep(.1)
+                assert status["state"] == "error" and "API" in status["error"], status
+                assert rpc("settings")["ai_model"] != "unsaved-portable-test"
+                print("PORTABLE ASI SETTINGS: PASS; unsaved API check does not change saved fields")
             if "--browser-check" in sys.argv:
                 job = rpc("browser_check")["job_id"]
                 deadline = time.monotonic() + 30

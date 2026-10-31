@@ -1,6 +1,7 @@
 #include "rpc.h"
 #include "input_policy.h"
 #include "display_text.h"
+#include "settings_panel.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <dinput.h>
@@ -35,7 +36,10 @@ struct State {
     std::deque<std::function<void()>> queue;
     std::string status = "Подключение к бэкенду…", answer, job;
     Json documents = Json::array(), hits = Json::array(), sources = Json::array(), history = Json::array();
-    Json preferences = Json::object();
+    Json preferences = Json::object(), settings = Json::object();
+    unsigned settingsRevision = 0;
+    bool settingsPending = false, settingsSaved = false;
+    std::string settingsMessage, testJob;
     std::shared_ptr<const Json> document;
     Binding toggle{'L', true, false, false}, input{'F', false, true, false};
     Binding previousLaw{VK_LEFT, false, true, false}, nextLaw{VK_RIGHT, false, true, false};
@@ -54,6 +58,8 @@ HWND gameWindow = nullptr;
 WNDPROC previousProc = nullptr;
 IDirect3DDevice9* activeDevice = nullptr;
 bool initialized = false;
+SettingsPanel settingsPanel;
+std::array<ImFont*, 13> uiFonts{};
 RECT previousClip{};
 using EndSceneFn = HRESULT(WINAPI*)(IDirect3DDevice9*);
 using ResetFn = HRESULT(WINAPI*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
@@ -113,10 +119,11 @@ void Status(const std::string& text) {
     { std::lock_guard<std::mutex> lock(S().mutex); S().status = text; }
     Log(text);
 }
-void Enqueue(std::function<void()> work) {
+bool Enqueue(std::function<void()> work) {
     auto& state = S();
     std::lock_guard<std::mutex> lock(state.queueMutex);
-    if (state.queue.size() < 16) { state.queue.push_back(std::move(work)); state.wake.notify_one(); }
+    if (state.queue.size() < 16) { state.queue.push_back(std::move(work)); state.wake.notify_one(); return true; }
+    return false;
 }
 
 bool Down(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
@@ -174,6 +181,19 @@ void IoThread() {
                 if (!state.queue.empty()) { work = std::move(state.queue.front()); state.queue.pop_front(); }
             }
             if (work) work();
+            std::string testJob;
+            { std::lock_guard<std::mutex> lock(state.mutex); testJob = state.testJob; }
+            if (!testJob.empty()) {
+                auto result = Rpc("job_status", {{"id", testJob}});
+                if (result.value("state", "error") != "running") {
+                    std::lock_guard<std::mutex> lock(state.mutex);
+                    if (result.value("state", "error") == "done") {
+                        const auto& value = result.at("result");
+                        state.settingsMessage = "Соединение работает. Провайдер: " + value.value("provider", "") + " / Модель: " + value.value("model", "");
+                    } else state.settingsMessage = result.value("error", "Проверка отменена");
+                    state.testJob.clear();
+                }
+            }
             std::string job;
             { std::lock_guard<std::mutex> lock(state.mutex); job = state.job; }
             if (!job.empty()) {
@@ -201,6 +221,8 @@ void IoThread() {
             std::lock_guard<std::mutex> lock(state.mutex);
             state.busy = false;
             state.job.clear();
+            state.testJob.clear(); state.settingsPending = false;
+            state.settingsMessage = error.what();
         }
     }
 }
@@ -216,6 +238,7 @@ void Refresh() {
             S().documents = documents;
             S().preferences = preferences;
             S().preferencesLoaded = true;
+            S().settings = settings; ++S().settingsRevision;
             S().toggle = ParseBinding(settings.value("toggle_hotkey", "Ctrl+L"), S().toggle);
             S().input = ParseBinding(settings.value("input_hotkey", "Alt+F"), S().input);
             S().previousLaw = ParseBinding(settings.value("prev_law_hotkey", "Alt+Left"), S().previousLaw);
@@ -286,6 +309,8 @@ void Draw() {
     static std::string sentSearch;
     static DocumentSearch readerSearch;
     static bool previousFindNext = false;
+    static unsigned settingsRevision = 0;
+    static Fade visibility;
     static ULONGLONG searchChanged = 0;
     static bool restored = false;
     static bool previousLeft = false, previousRight = false;
@@ -295,7 +320,8 @@ void Draw() {
     auto& state = S();
     Binding toggle, input, previousLaw, nextLaw, scrollUp, scrollDown;
     Json documents, hits, sources;
-    std::string status, answer, selectedId;
+    std::string status, answer, selectedId, settingsMessage;
+    bool settingsPending, testing;
     bool busy, searching;
     std::shared_ptr<const Json> document;
     {
@@ -303,6 +329,11 @@ void Draw() {
         toggle = state.toggle; input = state.input;
         previousLaw = state.previousLaw; nextLaw = state.nextLaw;
         scrollUp = state.scrollUp; scrollDown = state.scrollDown;
+        if (settingsRevision != state.settingsRevision) {
+            settingsPanel.Receive(state.settings, state.settingsSaved); state.settingsSaved = false; settingsRevision = state.settingsRevision;
+        }
+        settingsPending = state.settingsPending; testing = !state.testJob.empty(); settingsMessage = state.settingsMessage;
+        if (!settingsPending) settingsPanel.awaitingSave = false;
         selectedId = state.selectedId;
         documents = state.documents; hits = state.hits; sources = state.sources;
         status = state.status; answer = state.answer; busy = state.busy; searching = state.searching; document = state.document;
@@ -316,7 +347,10 @@ void Draw() {
     bool t = focused && Pressed(toggle), i = focused && Pressed(input), e = focused && Down(VK_ESCAPE);
     if (t && !previousToggle) SetMode(mode == Mode::Hidden ? Mode::View : Mode::Hidden);
     if (i && !previousInput) SetMode(mode == Mode::Input ? Mode::View : Mode::Input);
-    if (e && !previousEscape && mode != Mode::Hidden) SetMode(mode == Mode::Input ? Mode::View : Mode::Hidden);
+    if (e && !previousEscape && mode != Mode::Hidden) {
+        if (settingsPanel.open && !settingsPending && !testing) settingsPanel.Cancel();
+        SetMode(mode == Mode::Input ? Mode::View : Mode::Hidden);
+    }
     previousToggle = t; previousInput = i; previousEscape = e;
     bool left = focused && Pressed(previousLaw), right = focused && Pressed(nextLaw);
     bool up = focused && Pressed(scrollUp), down = focused && Pressed(scrollDown);
@@ -334,13 +368,24 @@ void Draw() {
     }
     previousLeft = left; previousRight = right; previousUp = up; previousDown = down;
     if (!focused && mode == Mode::Input) SetMode(Mode::View, false);
-    if (mode == Mode::Hidden) return;
+    const Appearance appearance = settingsPanel.Current();
+    const float fade = visibility.Update(mode != Mode::Hidden, appearance.animations, ImGui::GetIO().DeltaTime);
+    if (fade <= 0) return;
+    ApplyAppearance(appearance, fade);
+    const float scale = appearance.font / 17.f;
+    ImGui::PushFont(uiFonts[appearance.font - 14]);
+    struct FontScope { ~FontScope() { ImGui::PopFont(); } } fontScope;
     if (mode == Mode::Input) ClipCursor(nullptr);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(620, 400), ImVec2(3000, 2000));
+    const auto screen = ImGui::GetIO().DisplaySize;
+    const ImVec2 maximum(std::max(320.f, screen.x - 24), std::max(260.f, screen.y - 24));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(maximum.x, (settingsPanel.open ? 750.f : showChat ? (showList ? 1100.f : 900.f) : showList ? 800.f : 660.f) * scale), std::min(maximum.y, 440 * scale)), maximum);
     ImGui::SetNextWindowSize(ImVec2(1100, 720), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(60, 80), ImGuiCond_FirstUseEver);
     ImGuiWindowFlags flags = mode == Mode::Input ? 0 : ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove;
     ImGui::Begin("AMAZING / ЗАКОНЫ", nullptr, flags);
+    const auto position = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+    const ImVec2 bounded(std::clamp(position.x, 0.f, std::max(0.f, screen.x - size.x)), std::clamp(position.y, 0.f, std::max(0.f, screen.y - size.y)));
+    if (bounded.x != position.x || bounded.y != position.y) ImGui::SetWindowPos(bounded);
     auto savePanels = [&] {
         const bool listValue = showList, chatValue = showChat;
         Enqueue([listValue, chatValue] {
@@ -349,13 +394,53 @@ void Draw() {
             Rpc("state_set", {{"key", "native"}, {"value", prefs}});
         });
     };
-    if (ImGui::Button(showList ? "Законы: открыты" : "Законы", ImVec2(160, 36))) { showList = !showList; savePanels(); }
-    ImGui::SameLine(); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145, 36))) { showChat = !showChat; savePanels(); }
-    ImGui::SameLine(); if (ImGui::Button("Обновить", ImVec2(110, 36))) Refresh();
-    ImGui::SameLine(); if (ImGui::Button("Скрыть", ImVec2(95, 36))) SetMode(Mode::Hidden);
+    if (ImGui::Button(showList ? "Законы: открыты" : "Законы", ImVec2(160 * scale, 36 * scale))) { showList = !showList; savePanels(); }
+    ImGui::SameLine(); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145 * scale, 36 * scale))) { showChat = !showChat; savePanels(); }
+    ImGui::SameLine(); if (ImGui::Button("Обновить", ImVec2(110 * scale, 36 * scale))) Refresh();
+    ImGui::SameLine(); if (ImGui::Button("Скрыть", ImVec2(95 * scale, 36 * scale))) SetMode(Mode::Hidden);
+    ImGui::SameLine();
+    const auto gearPosition = ImGui::GetCursorScreenPos();
+    if (ImGui::InvisibleButton("settings-gear", ImVec2(36 * scale, 36 * scale)) && !settingsPending && !testing) {
+        if (settingsPanel.open) settingsPanel.Cancel(); else { settingsPanel.Open(); SetMode(Mode::Input); }
+        Enqueue([] { auto value = Rpc("settings"); std::lock_guard<std::mutex> lock(S().mutex); S().settings = value; ++S().settingsRevision; });
+    }
+    auto* gearDraw = ImGui::GetWindowDrawList();
+    gearDraw->AddRectFilled(gearPosition, ImVec2(gearPosition.x + 36 * scale, gearPosition.y + 36 * scale), ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered : ImGuiCol_Button), 6 * scale);
+    ImVec2 center(gearPosition.x + 18 * scale, gearPosition.y + 18 * scale);
+    auto gearColor = ImGui::GetColorU32(ImGuiCol_Text);
+    gearDraw->AddCircle(center, 7 * scale, gearColor, 24, 2 * scale);
+    gearDraw->AddCircle(center, 2 * scale, gearColor, 16, 1.5f * scale);
+    for (int tooth = 0; tooth < 8; ++tooth) {
+        const float angle = tooth * 3.14159265f / 4;
+        gearDraw->AddLine(ImVec2(center.x + std::cos(angle) * 7 * scale, center.y + std::sin(angle) * 7 * scale),
+                          ImVec2(center.x + std::cos(angle) * 11 * scale, center.y + std::sin(angle) * 11 * scale), gearColor, 3 * scale);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Настройки");
     ImGui::TextDisabled("%s", mode == Mode::Input ? "Ввод / Esc: просмотр" : "Просмотр / Alt+F: ввод");
+    if (settingsPanel.open) {
+        const auto action = settingsPanel.Draw(settingsPending, testing, settingsMessage);
+        if (action == SettingsPanel::Action::Save || action == SettingsPanel::Action::Test) {
+            const Json values = settingsPanel.Values();
+            const bool save = action == SettingsPanel::Action::Save;
+            { std::lock_guard<std::mutex> lock(state.mutex); state.settingsPending = true; state.settingsMessage = save ? "Сохраняем…" : "Проверяем соединение…"; }
+            bool queued = Enqueue([values, save] {
+                if (!Rpc("health").value("native_settings", false))
+                    throw std::runtime_error("Обновите и перезапустите бэкенд: запустите start_backend.bat из нового комплекта settings-update.");
+                auto result = Rpc(save ? "settings_save" : "ai_test", values);
+                std::lock_guard<std::mutex> lock(S().mutex);
+                S().settingsPending = false;
+                if (save) { S().settings = result; S().settingsSaved = true; ++S().settingsRevision; S().settingsMessage = "Настройки сохранены"; }
+                else S().testJob = result.at("job_id").get<std::string>();
+            });
+            if (!queued) { std::lock_guard<std::mutex> lock(state.mutex); state.settingsPending = false; state.settingsMessage = "Очередь занята. Повторите действие."; }
+        } else if (action == SettingsPanel::Action::CancelTest) {
+            Enqueue([] { std::string job; { std::lock_guard<std::mutex> lock(S().mutex); job = S().testJob; } if (!job.empty()) Rpc("job_cancel", {{"id", job}}); });
+        }
+        ImGui::End();
+        return;
+    }
     ImGui::Spacing();
-    ImGui::SetNextItemWidth(std::max(150.0f, ImGui::GetContentRegionAvail().x - 285));
+    ImGui::SetNextItemWidth(std::max(150.0f, ImGui::GetContentRegionAvail().x - 285 * scale));
     if (ImGui::InputTextWithHint("##search", "Найти в законах…", search, sizeof(search))) searchChanged = GetTickCount64();
     const bool searchFocused = ImGui::IsItemActive();
     if (readerSearch.query != search) {
@@ -366,9 +451,9 @@ void Draw() {
         readerSearch.jump = true;
     };
     ImGui::SameLine();
-    if (ImGui::Button("<##match", ImVec2(38, 0))) stepMatch(-1);
+    if (ImGui::Button("<##match", ImVec2(38 * scale, 0))) stepMatch(-1);
     ImGui::SameLine();
-    if (ImGui::Button(">##match", ImVec2(38, 0))) stepMatch(1);
+    if (ImGui::Button(">##match", ImVec2(38 * scale, 0))) stepMatch(1);
     ImGui::SameLine();
     ImGui::TextDisabled("%d / %d", readerSearch.total ? readerSearch.active + 1 : 0, readerSearch.total);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Совпадения в открытом законе. F3 / Shift+F3; Enter в поиске.");
@@ -392,7 +477,7 @@ void Draw() {
         if (!query.empty()) showList = true;
     }
     if (showList) {
-        const float listWidth = std::clamp(ImGui::GetContentRegionAvail().x * .27f, 220.0f, 340.0f);
+        const float listWidth = std::clamp(ImGui::GetContentRegionAvail().x * .27f, 220.0f * scale, 340.0f * scale);
         ImGui::BeginChild("laws", ImVec2(listWidth, -30), ImGuiChildFlags_Borders);
         ImGui::TextDisabled(searching ? "РЕЗУЛЬТАТЫ ПОИСКА" : "БИБЛИОТЕКА ЗАКОНОВ");
         ImGui::Separator();
@@ -406,16 +491,16 @@ void Draw() {
             auto label = LawDisplayTitle(item.value("title", ""));
             ImGui::PushID(id.c_str());
             const float width = ImGui::GetContentRegionAvail().x;
-            const float height = std::max(58.0f, ImGui::CalcTextSize(label.c_str(), nullptr, false, width - 26).y + 24);
+            const float height = std::max(44.0f * scale, ImGui::CalcTextSize(label.c_str(), nullptr, false, width - 26 * scale).y + 24 * scale);
             const auto pos = ImGui::GetCursorScreenPos();
             const bool selected = document && document->value("id", "") == id;
             if (ImGui::InvisibleButton("law", ImVec2(width, height))) LoadDocument(id);
             const bool hovered = ImGui::IsItemHovered();
             auto* draw = ImGui::GetWindowDrawList();
             draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
-                selected ? IM_COL32(35, 64, 91, 255) : hovered ? IM_COL32(31, 44, 61, 255) : IM_COL32(23, 32, 45, 255), 7);
-            if (selected) draw->AddRectFilled(pos, ImVec2(pos.x + 3, pos.y + height), IM_COL32(95, 184, 229, 255), 2);
-            draw->AddText(nullptr, 0, ImVec2(pos.x + 13, pos.y + 12), IM_COL32(228, 235, 244, 255), label.c_str(), nullptr, width - 26);
+                selected ? ImGui::GetColorU32(ImGuiCol_Header) : hovered ? ImGui::GetColorU32(ImGuiCol_HeaderHovered) : ImGui::GetColorU32(ImGuiCol_FrameBg), 7);
+            if (selected) draw->AddRectFilled(pos, ImVec2(pos.x + 3 * scale, pos.y + height), ImGui::GetColorU32(ImGuiCol_CheckMark), 2);
+            draw->AddText(nullptr, 0, ImVec2(pos.x + 13 * scale, pos.y + 12 * scale), ImGui::GetColorU32(ImGuiCol_Text), label.c_str(), nullptr, width - 26 * scale);
             if (hovered) ImGui::SetTooltip("%s", label.c_str());
             ImGui::PopID();
         }
@@ -423,13 +508,13 @@ void Draw() {
         ImGui::EndChild();
         ImGui::SameLine();
     }
-    float readerWidth = showChat ? std::max(240.0f, ImGui::GetContentRegionAvail().x - 350) : 0;
+    float readerWidth = showChat ? std::max(240.0f * scale, ImGui::GetContentRegionAvail().x - 350 * scale) : 0;
     ImGui::BeginChild("reader", ImVec2(readerWidth, -26), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
     const auto docId = document ? document->value("id", "") : "";
     if (docId != renderedId) { ImGui::SetScrollY(0); renderedId = docId; readerSearch.active = 0; readerSearch.jump = true; }
     else if (scrollDelta) ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() + scrollDelta));
     if (document) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.64f, .82f, .94f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
         auto title = LawDisplayTitle(document->value("title", "Закон"));
         ImGui::TextWrapped("%s", title.c_str());
         ImGui::PopStyleColor();
@@ -505,21 +590,10 @@ HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
         int needed = WideCharToMultiByte(CP_UTF8, 0, fontPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
         std::string utf8(needed, '\0');
         WideCharToMultiByte(CP_UTF8, 0, fontPath.c_str(), -1, utf8.data(), needed, nullptr, nullptr);
-        io.Fonts->AddFontFromFileTTF(utf8.c_str(), 17, nullptr, io.Fonts->GetGlyphRangesCyrillic());
-        ImGui::StyleColorsDark();
-        auto& style = ImGui::GetStyle();
-        style.WindowRounding = 10; style.ChildRounding = 8; style.FrameRounding = 6;
-        style.GrabRounding = 5; style.ScrollbarRounding = 6;
-        style.WindowPadding = ImVec2(14, 12); style.FramePadding = ImVec2(12, 8);
-        style.ItemSpacing = ImVec2(10, 8); style.ScrollbarSize = 13;
-        style.Colors[ImGuiCol_WindowBg] = ImVec4(.045f, .065f, .095f, .97f);
-        style.Colors[ImGuiCol_ChildBg] = ImVec4(.06f, .085f, .12f, 1);
-        style.Colors[ImGuiCol_TitleBg] = style.Colors[ImGuiCol_TitleBgActive] = ImVec4(.08f, .14f, .21f, 1);
-        style.Colors[ImGuiCol_Button] = ImVec4(.13f, .22f, .31f, 1);
-        style.Colors[ImGuiCol_ButtonHovered] = ImVec4(.19f, .34f, .46f, 1);
-        style.Colors[ImGuiCol_FrameBg] = ImVec4(.10f, .15f, .22f, 1);
-        style.Colors[ImGuiCol_Border] = ImVec4(.19f, .26f, .34f, .7f);
-        style.Colors[ImGuiCol_Text] = ImVec4(.88f, .92f, .96f, 1);
+        for (int size = 14; size <= 26; ++size)
+            uiFonts[size - 14] = io.Fonts->AddFontFromFileTTF(utf8.c_str(), static_cast<float>(size), nullptr, io.Fonts->GetGlyphRangesCyrillic());
+        io.FontDefault = uiFonts[3];
+        ApplyAppearance(Appearance{}, 1);
         ImGui_ImplWin32_Init(gameWindow);
         ImGui_ImplDX9_Init(device);
         previousProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(gameWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WindowProc)));
@@ -661,6 +735,11 @@ extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayProbe() {
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayShowForTest() {
     SetMode(Mode::View);
+}
+
+extern "C" __declspec(dllexport) void __cdecl AmazingOverlaySettingsForTest(int font, int light) {
+    settingsPanel.Open(); settingsPanel.draft.font = std::clamp(font, 14, 26);
+    settingsPanel.draft.light = light != 0;
 }
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayDiagnostics(char* buffer, unsigned size) {

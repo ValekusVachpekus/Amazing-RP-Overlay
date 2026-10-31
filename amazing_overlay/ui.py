@@ -264,11 +264,11 @@ class ManagerWindow(RemoteWindow):
             self.inputs[key] = QLineEdit()
             form.addRow(title, self.inputs[key])
         font = QSpinBox()
-        font.setRange(10, 30)
+        font.setRange(14, 26)
         self.inputs["font_size"] = font
         form.addRow("Размер текста", font)
         opacity = QDoubleSpinBox()
-        opacity.setRange(0.4, 1)
+        opacity.setRange(0.3, 1)
         opacity.setSingleStep(0.05)
         self.inputs["opacity"] = opacity
         form.addRow("Прозрачность", opacity)

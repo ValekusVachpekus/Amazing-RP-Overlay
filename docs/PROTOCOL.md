@@ -39,7 +39,7 @@ There is no arbitrary Python execution endpoint.
 | state_get | key, default | client preference value |
 | state_set | key, value | true |
 | ai | question, history=[], doc_ids=null | job_id |
-| ai_test | — | job_id |
+| ai_test | необязательные поля настроек API (без сохранения) | job_id |
 | browser_check | optional visible=false | job_id; launches Chromium on a local test page, no forum request |
 | job_status | id | state, kind, progress, result/error |
 | job_cancel | id | cooperative cancellation request |

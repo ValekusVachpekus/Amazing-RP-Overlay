@@ -65,6 +65,23 @@ class DocumentsTest(unittest.TestCase):
 
 
 class SettingsTest(unittest.TestCase):
+    def test_appearance_bounds_and_unsaved_api_preview(self):
+        from amazing_overlay import settings
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clean_env = {k: v for k, v in os.environ.items() if not k.startswith("AI_")}
+            with patch.object(settings, "ROOT", root), patch.object(settings, "DATA", root / "data"), patch.dict(os.environ, clean_env, clear=True):
+                draft = settings.preview_settings({"ai_api_key": "draft-secret", "ai_model": "draft-model", "opacity": .1, "font_size": 50, "theme": "light", "animations": False})
+                self.assertEqual((draft["opacity"], draft["font_size"], draft["theme"], draft["animations"]), (.3, 26, "light", False))
+                self.assertEqual(draft["ai_api_key"], "draft-secret")
+                self.assertFalse((root / "data").exists())
+                saved = settings.save_settings({"theme": "light", "animations": False, "opacity": .3, "font_size": 26})
+                self.assertEqual(saved["theme"], "light")
+                self.assertFalse(settings.load_settings()["animations"])
+                self.assertNotIn("ai_api_key", saved)
+                with self.assertRaises(ValueError):
+                    settings.save_settings({"theme": "unknown"})
+
     def test_private_key_and_environment_precedence(self):
         from amazing_overlay import settings
         with tempfile.TemporaryDirectory() as directory:
@@ -188,6 +205,38 @@ class ServiceTest(unittest.TestCase):
 
     def test_api_key_not_leaked_by_errors(self):
         self.assertNotIn("super-secret", ai.friendly_error(RuntimeError("key=super-secret"), {"ai_api_key": "super-secret"}))
+
+    def test_gemini_uses_configured_api_address_and_model(self):
+        class Response:
+            def __enter__(self): return iter([b'data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'])
+            def __exit__(self, *args): pass
+        with patch.object(ai.urllib.request, "urlopen", return_value=Response()) as request:
+            answer, _ = ai.completion({"ai_provider": "gemini", "ai_base_url": "https://proxy.example/v1beta", "ai_model": "chosen-model",
+                                       "ai_api_key": "fake-key", "max_tokens": 128}, [{"role": "user", "content": "test"}], threading.Event(), lambda _: None)
+        self.assertEqual(answer, "ok")
+        self.assertTrue(request.call_args.args[0].full_url.startswith("https://proxy.example/v1beta/models/chosen-model:"))
+
+    def test_unsaved_connection_test_and_error_redaction(self):
+        from amazing_overlay import settings
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("AI_")}
+        with patch.object(settings, "ROOT", self.root), patch.object(settings, "DATA", self.root / "settings"), patch.dict(os.environ, clean_env, clear=True):
+            captured = []
+            def fake(value, *args):
+                captured.append(value)
+                raise RuntimeError("failed draft-secret")
+            with patch.object(ai, "completion", fake):
+                job = self.backend.dispatch("ai_test", {"ai_api_key": "draft-secret", "ai_model": "draft-model"})["job_id"]
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    result = self.backend.dispatch("job_status", {"id": job})
+                    if result["state"] != "running":
+                        break
+                    time.sleep(.01)
+            self.assertEqual(captured[0]["ai_model"], "draft-model")
+            self.assertEqual(captured[0]["ai_api_key"], "draft-secret")
+            self.assertEqual(result["state"], "error")
+            self.assertNotIn("draft-secret", json.dumps(result))
+            self.assertFalse((self.root / "settings").exists())
 
 
 if __name__ == "__main__":

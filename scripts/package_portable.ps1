@@ -1,6 +1,7 @@
+param([string]$BundlePath = 'dist/AmazingLawOverlay')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$bundleDirectory = Join-Path $projectRoot 'dist/AmazingLawOverlay'
+$bundleDirectory = Join-Path $projectRoot $BundlePath
 if (-not (Test-Path -LiteralPath (Join-Path $bundleDirectory 'AmazingLawOverlay.exe'))) {
     throw 'Build the executable first.'
 }

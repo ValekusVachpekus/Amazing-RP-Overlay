@@ -12,7 +12,7 @@ from . import __version__
 from .documents import canonical_url, document_html
 from .parser import Cancelled, browser_session, check_cancel, export_laws, parse_thread, update_sources
 from .browsers import configure_browser_environment
-from .settings import DATA, ROOT, load_settings, save_settings
+from .settings import DATA, ROOT, load_settings, save_settings, preview_settings
 from .store import Store
 
 
@@ -35,7 +35,7 @@ class Backend:
                         pass
             self.store.set_preference("sources_initialized", True)
 
-    def job(self, kind, action):
+    def job(self, kind, action, error_settings=None):
         ident = uuid.uuid4().hex
         with self.lock:
             # Bound retained responses without evicting active jobs.
@@ -59,7 +59,7 @@ class Backend:
                 with self.lock:
                     self.jobs[ident].update(state="cancelled", error=str(exc))
             except Exception as exc:
-                message = ai.friendly_error(exc, load_settings(True)) if kind in {"ai", "ai-test"} else str(exc)
+                message = ai.friendly_error(exc, error_settings or load_settings(True)) if kind in {"ai", "ai-test"} else str(exc)
                 with self.lock:
                     self.jobs[ident].update(state="error", error=message)
         self.executor.submit(run)
@@ -67,7 +67,7 @@ class Backend:
 
     def dispatch(self, method, params):
         if method == "health":
-            return {"version": 1, "app_version": __version__, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
+            return {"version": 1, "app_version": __version__, "native_settings": True, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
                     "browsers_dir": configure_browser_environment(), "import_warnings": self.import_warnings}
         if method == "documents":
             return self.store.documents()
@@ -147,11 +147,11 @@ class Backend:
         if method == "ai":
             return self.job("ai", lambda cancel, progress: ai.ask(self.store, load_settings(True), params, cancel, progress))
         if method == "ai_test":
+            settings = preview_settings(params) if params else load_settings(True)
             def test(cancel, progress):
-                settings = load_settings(True)
                 answer, usage = ai.completion(settings, [{"role": "user", "content": "Ответь одним словом: работает"}], cancel, progress, 128)
                 return {"answer": answer, "usage": usage, "provider": settings["ai_provider"], "model": settings["ai_model"]}
-            return self.job("ai-test", test)
+            return self.job("ai-test", test, error_settings=settings)
         raise ValueError("Неизвестный метод API")
 
     def close(self):

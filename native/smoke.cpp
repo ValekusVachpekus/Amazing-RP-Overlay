@@ -52,6 +52,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     using Show = void(__cdecl*)();
     auto probe = reinterpret_cast<Probe>(GetProcAddress(library, "AmazingOverlayProbe"));
     auto show = reinterpret_cast<Show>(GetProcAddress(library, "AmazingOverlayShowForTest"));
+    using SettingsPreview = void(__cdecl*)(int, int);
+    auto settingsPreview = reinterpret_cast<SettingsPreview>(GetProcAddress(library, "AmazingOverlaySettingsForTest"));
+    bool previewedSettings = false;
     using Diagnostics = void(__cdecl*)(char*, unsigned);
     auto diagnostics = reinterpret_cast<Diagnostics>(GetProcAddress(library, "AmazingOverlayDiagnostics"));
     if (!probe || !show) return 4;
@@ -67,6 +70,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         device->Present(nullptr, nullptr, nullptr, nullptr);
         if (selfTest) {
             if (probe() & 1u) show();
+            if (!previewedSettings && settingsPreview && probe() == 3u && wcsstr(command, L"--settings")) {
+                settingsPreview(wcsstr(command, L"--large") ? 26 : 17, wcsstr(command, L"--light") ? 1 : 0);
+                previewedSettings = true;
+            }
             if (++frames >= 250 && probe() == 3u) { device->Release(); d3d->Release(); return 0; }
             if (GetTickCount64() - started > 15000) {
                 char detail[2048]{};

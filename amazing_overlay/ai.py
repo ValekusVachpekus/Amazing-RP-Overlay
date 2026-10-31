@@ -31,14 +31,12 @@ def friendly_error(exc, settings):
 def completion(settings, messages, cancel, progress, limit=None):
     check_cancel(cancel)
     if not settings.get("ai_api_key"):
-        raise ValueError("Укажите API-ключ в отдельном окне управления → ИИ")
+        raise ValueError("Укажите API-ключ в настройках ASI или в окне управления → ИИ")
     maximum = int(limit or settings["max_tokens"])
     answer = ""
     usage = {}
     if settings["ai_provider"] == "gemini":
-        base = settings.get("ai_base_url", "")
-        if "generativelanguage.googleapis.com" not in base:
-            base = "https://generativelanguage.googleapis.com/v1beta"
+        base = settings.get("ai_base_url") or "https://generativelanguage.googleapis.com/v1beta"
         base = base.rstrip("/")
         instructions = "\n".join(m["content"] for m in messages if m["role"] == "system")
         payload = {"systemInstruction": {"parts": [{"text": instructions}]},

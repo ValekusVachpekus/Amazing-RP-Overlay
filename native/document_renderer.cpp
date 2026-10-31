@@ -42,7 +42,7 @@ float RichText(const std::string& text, ImVec2 origin, float width, ImU32 color)
             float x2 = ImGui::CalcTextSize(line, begin + to).x;
             bool active = currentSearch && first + static_cast<int>(i) == currentSearch->active;
             draw->AddRectFilled(ImVec2(origin.x + x1, y), ImVec2(origin.x + x2, y + size + 2),
-                active ? IM_COL32(188, 116, 25, 255) : IM_COL32(96, 79, 29, 255), 2);
+                ImGui::GetColorU32(active ? ImGuiCol_PlotHistogram : ImGuiCol_PlotHistogramHovered), 2);
             if (active && currentSearch->jump && from == matches[i].first) ImGui::SetScrollFromPosY(y - ImGui::GetWindowPos().y, .35f);
         }
         draw->AddText(ImVec2(origin.x, y), color, line, stop);
@@ -152,10 +152,10 @@ void Table(const Json& table) {
     for (const auto& cell : cells) {
         ImVec2 from(origin.x + cell.col * width, origin.y + offsets[cell.row]);
         ImVec2 to(from.x + cell.colspan * width, origin.y + offsets[cell.row + cell.rowspan]);
-        draw->AddRectFilled(from, to, cell.heading ? IM_COL32(36, 55, 78, 255) : IM_COL32(22, 32, 47, 255));
-        draw->AddRect(from, to, IM_COL32(86, 108, 137, 255));
+        draw->AddRectFilled(from, to, ImGui::GetColorU32(cell.heading ? ImGuiCol_TableHeaderBg : ImGuiCol_TableRowBg));
+        draw->AddRect(from, to, ImGui::GetColorU32(ImGuiCol_Border));
         draw->PushClipRect(from, to, true);
-        RichText(cell.text, ImVec2(from.x + 8, from.y + 8), width * cell.colspan - 16, IM_COL32(226, 232, 240, 255));
+        RichText(cell.text, ImVec2(from.x + 8, from.y + 8), width * cell.colspan - 16, ImGui::GetColorU32(ImGuiCol_Text));
         draw->PopClipRect();
     }
     ImGui::Dummy(ImVec2(width * columns, offsets.back()));
@@ -178,7 +178,7 @@ void Node(const Json& node) {
     auto text = CompactDisplayText(Text(node));
     if (text.find_first_not_of(" \r\n\t") == std::string::npos) return;
     bool heading = tag.size() == 2 && tag[0] == 'h';
-    if (heading) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.58f, .78f, 1, 1));
+    if (heading) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
     if (tag == "li") ImGui::Bullet();
     const auto origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
