@@ -28,6 +28,16 @@ int main() {
     io.DisplaySize = ImVec2(1400, 1000); io.DeltaTime = 1.f / 60;
     io.Fonts->AddFontDefault(); unsigned char* pixels; int width, height;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    for (int size = 14; size <= 26; ++size) {
+        Appearance look; look.font = size;
+        ApplyAppearance(look, 1);
+        if (ImGui::GetStyle().MouseCursorScale < 1.f) return 13;
+        io.MouseDrawCursor = true;
+        io.AddMousePosEvent(120, 120);
+        ImGui::NewFrame(); ImGui::Render();
+        if (ImGui::GetDrawData()->TotalVtxCount == 0) return 14;
+    }
+    io.MouseDrawCursor = false;
     for (bool light : {false, true}) {
         Appearance look; look.light = light; look.font = 26; look.opacity = .3f;
         ApplyAppearance(look, .5f);

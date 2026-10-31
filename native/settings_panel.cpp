@@ -29,6 +29,9 @@ void ApplyAppearance(const Appearance& appearance, float fade) {
     color(ImGuiCol_PlotHistogram, {.74f,.45f,.10f,1}, {1,.68f,.22f,1});
     color(ImGuiCol_PlotHistogramHovered, {.37f,.31f,.11f,1}, {1,.88f,.55f,1});
     s.ScaleAllSizes(appearance.font / 17.f);
+    // ImGui truncates MouseCursorScale when scaling the style. Fonts below 17 px
+    // would round the cursor down to zero and make input mode look cursorless.
+    s.MouseCursorScale = std::max(1.f, appearance.font / 17.f);
     s.Alpha = appearance.opacity * fade;
 }
 
