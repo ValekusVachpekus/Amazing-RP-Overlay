@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <string>
+#include <sstream>
 #include <vector>
 
 namespace {
@@ -10,6 +11,32 @@ const Json& Children(const Json& node) {
     static const Json empty = Json::array();
     const auto at = node.find("children");
     return at != node.end() && at->is_array() ? *at : empty;
+}
+
+std::string CompactDisplayText(std::string value) {
+    // Forum authors often separate clauses with four or more <br> elements.
+    // Keep content lines and indentation; the renderer supplies paragraph spacing.
+    auto replace = [&](const std::string& from, const std::string& to) {
+        size_t at = 0;
+        while ((at = value.find(from, at)) != std::string::npos) {
+            value.replace(at, from.size(), to);
+            at += to.size();
+        }
+    };
+    replace("\r\n", "\n");
+    replace("\r", "\n");
+    replace("\xC2\xA0", " ");   // non-breaking space
+    replace("\xE2\xA0\x80", " "); // braille blank used as indentation
+    replace("\xE2\x80\x8B", "");  // zero-width space
+    std::istringstream lines(value);
+    std::string line, result;
+    while (std::getline(lines, line)) {
+        const auto end = line.find_last_not_of(" \t");
+        if (end == std::string::npos) continue;
+        if (!result.empty()) result += '\n';
+        result.append(line, 0, end + 1);
+    }
+    return result;
 }
 
 std::string Text(const Json& node) {
@@ -48,7 +75,7 @@ void Table(const Json& table) {
             int rs = std::clamp(cell.value("rowspan", 1), 1, 100);
             int cs = std::clamp(cell.value("colspan", 1), 1, 200 - c);
             rs = std::min(rs, static_cast<int>(rows.size()) - r);
-            cells.push_back({r, c, rs, cs, tag == "th", Text(cell)});
+            cells.push_back({r, c, rs, cs, tag == "th", CompactDisplayText(Text(cell))});
             for (int dr = 0; dr < rs; ++dr) for (int dc = 0; dc < cs; ++dc) occupied[r + dr][c + dc] = true;
             c += cs;
             columns = std::max(columns, c);
@@ -94,7 +121,7 @@ void Node(const Json& node) {
         for (const auto& child : Children(node)) Node(child);
         return;
     }
-    auto text = Text(node);
+    auto text = CompactDisplayText(Text(node));
     if (text.find_first_not_of(" \r\n\t") == std::string::npos) return;
     bool heading = tag.size() == 2 && tag[0] == 'h';
     if (heading) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.58f, .78f, 1, 1));
