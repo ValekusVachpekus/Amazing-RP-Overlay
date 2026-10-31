@@ -15,7 +15,7 @@ from amazing_overlay.transport import rpc
 
 def main():
     app = QCoreApplication([])
-    executable = ROOT / "dist" / "AmazingLawOverlay" / "AmazingLawOverlay.exe"
+    executable = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "dist" / "AmazingLawOverlay" / "AmazingLawOverlay.exe"
     with tempfile.TemporaryDirectory() as directory:
         env = {key: value for key, value in os.environ.items() if not key.startswith("AI_")}
         env.update(AMAZING_OVERLAY_DATA=directory, QT_QPA_PLATFORM="offscreen")
