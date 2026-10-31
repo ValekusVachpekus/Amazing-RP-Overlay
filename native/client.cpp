@@ -257,7 +257,8 @@ void Refresh() {
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (msg == WM_ACTIVATEAPP && !wParam) SetMode(Mode::View, false);
+    if ((msg == WM_ACTIVATEAPP && !wParam) || (msg == WM_SIZE && wParam == SIZE_MINIMIZED))
+        SetMode(Mode::Hidden, false);
     if (initialized && mode == Mode::Input) {
         ImGui_ImplWin32_WndProcHandler(window, msg, wParam, lParam);
         if ((msg >= WM_KEYFIRST && msg <= WM_KEYLAST) ||
@@ -367,7 +368,7 @@ void Draw() {
         lastScrollRepeat = ticks;
     }
     previousLeft = left; previousRight = right; previousUp = up; previousDown = down;
-    if (!focused && mode == Mode::Input) SetMode(Mode::View, false);
+    if (!focused && mode == Mode::Input) SetMode(Mode::Hidden, false);
     const Appearance appearance = settingsPanel.Current();
     const float fade = visibility.Update(mode != Mode::Hidden, appearance.animations, ImGui::GetIO().DeltaTime);
     if (fade <= 0) return;
@@ -735,6 +736,10 @@ extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayProbe() {
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayShowForTest() {
     SetMode(Mode::View);
+}
+
+extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayVisibilityForTest() {
+    return static_cast<unsigned>(mode.load());
 }
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlaySettingsForTest(int font, int light) {

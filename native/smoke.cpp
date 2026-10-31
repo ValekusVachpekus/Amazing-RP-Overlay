@@ -52,6 +52,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     using Show = void(__cdecl*)();
     auto probe = reinterpret_cast<Probe>(GetProcAddress(library, "AmazingOverlayProbe"));
     auto show = reinterpret_cast<Show>(GetProcAddress(library, "AmazingOverlayShowForTest"));
+    auto visibility = reinterpret_cast<Probe>(GetProcAddress(library, "AmazingOverlayVisibilityForTest"));
     using SettingsPreview = void(__cdecl*)(int, int);
     auto settingsPreview = reinterpret_cast<SettingsPreview>(GetProcAddress(library, "AmazingOverlaySettingsForTest"));
     bool previewedSettings = false;
@@ -74,7 +75,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
                 settingsPreview(wcsstr(command, L"--large") ? 26 : 17, wcsstr(command, L"--light") ? 1 : 0);
                 previewedSettings = true;
             }
-            if (++frames >= 250 && probe() == 3u) { device->Release(); d3d->Release(); return 0; }
+            if (++frames >= 250 && probe() == 3u) {
+                if (!visibility) return 6;
+                for (int cycle = 0; cycle < 100; ++cycle) {
+                    // Loss/restoration of focus must never turn Hidden into View.
+                    SendMessageW(window, WM_ACTIVATEAPP, FALSE, 0);
+                    SendMessageW(window, WM_ACTIVATEAPP, TRUE, 0);
+                    if (visibility() != 0) return 7;
+                    show();
+                    SendMessageW(window, WM_SIZE, SIZE_MINIMIZED, 0);
+                    SendMessageW(window, WM_SIZE, SIZE_RESTORED, MAKELPARAM(1280, 800));
+                    if (visibility() != 0) return 8;
+                }
+                device->Release(); d3d->Release(); return 0;
+            }
             if (GetTickCount64() - started > 15000) {
                 char detail[2048]{};
                 if (diagnostics) diagnostics(detail, sizeof(detail));

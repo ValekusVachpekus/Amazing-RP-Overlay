@@ -70,7 +70,8 @@ Json SettingsPanel::Values() const {
 
 SettingsPanel::Action SettingsPanel::Draw(bool busy, bool testing, const std::string& message) {
     Action action = Action::None;
-    ImGui::BeginChild("settings-body", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 12), ImGuiChildFlags_Borders);
+    const float messageHeight = message.empty() ? 0.f : ImGui::CalcTextSize(message.c_str(), nullptr, false, ImGui::GetContentRegionAvail().x).y + ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("settings-body", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 12 - messageHeight), ImGuiChildFlags_Borders);
     ImGui::TextUnformatted("НАСТРОЙКИ");
     ImGui::TextWrapped("Оформление видно сразу. «Отмена» вернёт прежний вид.");
     ImGui::Separator();
@@ -108,8 +109,8 @@ SettingsPanel::Action SettingsPanel::Draw(bool busy, bool testing, const std::st
     if (ImGui::Button(testing ? "Проверяем…" : "Проверить соединение") && !testing) action = Action::Test;
     if (testing) { ImGui::SameLine(); if (ImGui::Button("Остановить проверку")) action = Action::CancelTest; }
     ImGui::EndDisabled();
-    if (!message.empty()) ImGui::TextWrapped("%s", message.c_str());
     ImGui::EndChild();
+    if (!message.empty()) ImGui::TextWrapped("%s", message.c_str());
     ImGui::BeginDisabled(busy || testing);
     if (ImGui::Button(busy ? "Сохраняем…" : "Сохранить")) { action = Action::Save; awaitingSave = true; }
     ImGui::EndDisabled();
