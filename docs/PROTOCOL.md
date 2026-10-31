@@ -21,7 +21,7 @@ There is no arbitrary Python execution endpoint.
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| health | — | version, documents, data_dir, import_warnings |
+| health | — | version, app_version, documents, data_dir, browsers_dir, import_warnings |
 | documents | — | document metadata array |
 | document | id | document tree and sanitized HTML |
 | search | query, optional doc_ids, limit | ranked section hits including snippet/post_id/heading |
@@ -40,6 +40,7 @@ There is no arbitrary Python execution endpoint.
 | state_set | key, value | true |
 | ai | question, history=[], doc_ids=null | job_id |
 | ai_test | — | job_id |
+| browser_check | optional visible=false | job_id; launches Chromium on a local test page, no forum request |
 | job_status | id | state, kind, progress, result/error |
 | job_cancel | id | cooperative cancellation request |
 

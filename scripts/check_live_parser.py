@@ -15,7 +15,9 @@ def main():
         from amazing_overlay.documents import document_text
         from amazing_overlay.parser import browser_context, parse_thread
         from amazing_overlay.settings import ROOT
+        from amazing_overlay.browsers import configure_browser_environment
 
+        configure_browser_environment()
         with sync_playwright() as playwright:
             context = browser_context(playwright, visible="--visible" in sys.argv)
             try:

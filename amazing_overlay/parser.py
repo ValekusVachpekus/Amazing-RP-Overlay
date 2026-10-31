@@ -7,11 +7,13 @@ import os
 import re
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from .documents import canonical_url, document_text, parse_html, thread_id
 from .settings import DATA, atomic_json
 from .store import now
+from .browsers import configure_browser_environment
 
 
 class Cancelled(Exception):
@@ -80,37 +82,50 @@ def parse_thread(page, url, cancel=None, progress=lambda value: None):
 def browser_context(playwright, visible=False):
     profile = DATA / "browser-profile"
     profile.mkdir(parents=True, exist_ok=True)
-    context = playwright.chromium.launch_persistent_context(str(profile), headless=not visible,
-                                                            locale="ru-RU", viewport={"width": 1280, "height": 900})
+    try:
+        context = playwright.chromium.launch_persistent_context(str(profile), headless=not visible,
+                                                                locale="ru-RU", viewport={"width": 1280, "height": 900})
+    except Exception as exc:
+        if "Executable doesn't exist" not in str(exc):
+            raise
+        raise RuntimeError("Не найден Chromium для парсера. Нажмите «Установить Chromium» во вкладке «Обновление». "
+                           "Каталог браузеров: " + configure_browser_environment()) from exc
     context.set_default_timeout(15000)
     context.route("**/*", lambda route: route.abort() if route.request.resource_type in {"media", "font"} else route.continue_())
     return context
 
 
-def update_sources(store, ids, cancel, progress, visible=False):
+@contextmanager
+def browser_session(visible=False):
     from playwright.sync_api import sync_playwright
-    sources = [source for source in store.sources() if source["enabled"] and (ids is None or source["id"] in ids)]
-    results = []
+    configure_browser_environment()
     with sync_playwright() as playwright:
         context = browser_context(playwright, visible)
         try:
-            page = context.pages[0] if context.pages else context.new_page()
-            for index, source in enumerate(sources):
-                check_cancel(cancel)
-                progress({"item": index + 1, "total": len(sources), "message": source["url"]})
-                try:
-                    doc = parse_thread(page, source["url"], cancel, progress)
-                    check_cancel(cancel)
-                    store.publish(doc)
-                    results.append({"id": source["id"], "ok": True})
-                except Cancelled:
-                    raise
-                except Exception as exc:
-                    store.status(source["id"], str(exc))
-                    results.append({"id": source["id"], "ok": False, "error": str(exc)})
-                    progress({"message": str(exc), "error": True})
+            yield context
         finally:
             context.close()
+
+
+def update_sources(store, ids, cancel, progress, visible=False):
+    sources = [source for source in store.sources() if source["enabled"] and (ids is None or source["id"] in ids)]
+    results = []
+    with browser_session(visible) as context:
+        page = context.pages[0] if context.pages else context.new_page()
+        for index, source in enumerate(sources):
+            check_cancel(cancel)
+            progress({"item": index + 1, "total": len(sources), "message": source["url"]})
+            try:
+                doc = parse_thread(page, source["url"], cancel, progress)
+                check_cancel(cancel)
+                store.publish(doc)
+                results.append({"id": source["id"], "ok": True})
+            except Cancelled:
+                raise
+            except Exception as exc:
+                store.status(source["id"], str(exc))
+                results.append({"id": source["id"], "ok": False, "error": str(exc)})
+                progress({"message": str(exc), "error": True})
     return results
 
 

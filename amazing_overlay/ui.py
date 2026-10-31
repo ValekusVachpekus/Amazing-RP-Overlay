@@ -4,7 +4,7 @@ import html
 import json
 import sys
 
-from PySide6.QtCore import QEvent, QPoint, QProcess, QTimer, Qt
+from PySide6.QtCore import QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
 from PySide6.QtGui import QAction, QFont, QIcon, QTextCursor
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                               QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
 
 from .documents import chunks
 from .settings import ROOT, DEFAULTS
+from .browsers import configure_browser_environment
 from .transport import background, ensure_backend, rpc
 from .win32 import Hotkeys, activate, belongs_to_game, foreground, parse_hotkey, set_input
 
@@ -64,6 +65,10 @@ class BrowserInstaller(QMainWindow):
         from playwright._impl._driver import compute_driver_executable
         executable, script = compute_driver_executable()
         self.process = QProcess(self)
+        environment = QProcessEnvironment.systemEnvironment()
+        environment.insert("PLAYWRIGHT_BROWSERS_PATH", configure_browser_environment())
+        self.process.setProcessEnvironment(environment)
+        self.output.append("Каталог браузеров: " + configure_browser_environment())
         self.process.setProcessChannelMode(QProcess.MergedChannels)
         self.process.readyReadStandardOutput.connect(lambda: self.output.append(bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")))
         self.process.errorOccurred.connect(lambda error: self.output.append("Не удалось запустить установку: " + self.process.errorString()))
@@ -276,6 +281,7 @@ class ManagerWindow(RemoteWindow):
     def make_diagnostics(self):
         layout = self.tab("Диагностика")
         button("Обновить диагностику", lambda: self.call("health", done=self.show_health), layout)
+        button("Проверить запуск Chromium", lambda: self.start_job("browser_check", done=self.show_health), layout)
         self.diagnostics = QTextEdit()
         self.diagnostics.setReadOnly(True)
         layout.addWidget(self.diagnostics)

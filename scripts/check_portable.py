@@ -15,7 +15,8 @@ from amazing_overlay.transport import rpc
 
 def main():
     app = QCoreApplication([])
-    executable = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "dist" / "AmazingLawOverlay" / "AmazingLawOverlay.exe"
+    paths = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    executable = Path(paths[0]).resolve() if paths else ROOT / "dist" / "AmazingLawOverlay" / "AmazingLawOverlay.exe"
     with tempfile.TemporaryDirectory() as directory:
         env = {key: value for key, value in os.environ.items() if not key.startswith("AI_")}
         env.update(AMAZING_OVERLAY_DATA=directory, QT_QPA_PLATFORM="offscreen")
@@ -39,6 +40,18 @@ def main():
             rpc("state_set", {"key": "portable-test", "value": "работает"})
             assert rpc("state_get", {"key": "portable-test"}) == "работает"
             print("PORTABLE BACKEND: PASS; no local laws or credentials bundled")
+            if "--browser-check" in sys.argv:
+                job = rpc("browser_check")["job_id"]
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    status = rpc("job_status", {"id": job})
+                    if status["state"] != "running":
+                        break
+                    time.sleep(0.1)
+                assert status["state"] == "done", status.get("error", "Browser check timed out")
+                assert status["result"]["ok"]
+                assert "_internal" not in status["result"]["browsers_dir"], "Frozen driver reverted to bundle-local browsers"
+                print("PORTABLE CHROMIUM LAUNCH: PASS")
             for mode in ("manager", "overlay"):
                 client = subprocess.Popen([str(executable), mode], cwd=executable.parent, env=env)
                 try:

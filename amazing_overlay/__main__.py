@@ -7,9 +7,11 @@ import sys
 from PySide6.QtCore import QCoreApplication, QLockFile
 
 from .settings import DATA
+from .browsers import configure_browser_environment
 
 
 def main():
+    configure_browser_environment()
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["backend", "manager", "overlay", "install-browser"], nargs="?", default="manager")
     args = parser.parse_args()

@@ -8,14 +8,17 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import ai
+from . import __version__
 from .documents import canonical_url, document_html
-from .parser import Cancelled, browser_context, check_cancel, export_laws, parse_thread, update_sources
+from .parser import Cancelled, browser_session, check_cancel, export_laws, parse_thread, update_sources
+from .browsers import configure_browser_environment
 from .settings import DATA, ROOT, load_settings, save_settings
 from .store import Store
 
 
 class Backend:
     def __init__(self, data=DATA, root=ROOT):
+        configure_browser_environment()
         self.store = Store(data / "laws.db")
         self.lock = threading.RLock()
         self.browser_lock = threading.Lock()
@@ -64,7 +67,8 @@ class Backend:
 
     def dispatch(self, method, params):
         if method == "health":
-            return {"version": 1, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent), "import_warnings": self.import_warnings}
+            return {"version": 1, "app_version": __version__, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
+                    "browsers_dir": configure_browser_environment(), "import_warnings": self.import_warnings}
         if method == "documents":
             return self.store.documents()
         if method == "document":
@@ -107,7 +111,7 @@ class Backend:
             with self.lock:
                 self.jobs[params["id"]]["cancel"].set()
             return True
-        if method in {"preview", "update"}:
+        if method in {"preview", "update", "browser_check"}:
             if method == "preview":
                 canonical_url(params["url"])
 
@@ -117,15 +121,13 @@ class Backend:
                 try:
                     if method == "update":
                         return update_sources(self.store, params.get("ids"), cancel, progress, params.get("visible", False))
-                    from playwright.sync_api import sync_playwright
-                    with sync_playwright() as playwright:
-                        context = browser_context(playwright, params.get("visible", False))
-                        try:
-                            page = context.pages[0] if context.pages else context.new_page()
-                            doc = parse_thread(page, params["url"], cancel, progress)
-                            return {"document": doc, "html": document_html(doc)}
-                        finally:
-                            context.close()
+                    with browser_session(params.get("visible", False)) as context:
+                        page = context.pages[0] if context.pages else context.new_page()
+                        if method == "browser_check":
+                            page.set_content("<html><head><title>Amazing browser check</title></head><body>OK</body></html>")
+                            return {"ok": page.title() == "Amazing browser check", "browsers_dir": configure_browser_environment()}
+                        doc = parse_thread(page, params["url"], cancel, progress)
+                        return {"document": doc, "html": document_html(doc)}
                 finally:
                     self.browser_lock.release()
             return self.job(method, parse)
