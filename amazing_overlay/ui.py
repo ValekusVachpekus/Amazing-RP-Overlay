@@ -4,7 +4,7 @@ import html
 import json
 import sys
 
-from PySide6.QtCore import QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation
 from PySide6.QtGui import QAction, QFont, QIcon, QTextCursor
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                               QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -17,7 +17,7 @@ from .documents import chunks
 from .settings import ROOT, DEFAULTS
 from .browsers import configure_browser_environment
 from .transport import background, ensure_backend, rpc
-from .win32 import Hotkeys, activate, belongs_to_game, foreground, parse_hotkey, set_input
+from .win32 import Hotkeys, activate, belongs_to_game, foreground, native_owns_input, parse_hotkey, set_input
 
 STYLE = """
 QWidget {background:#111827;color:#e2e8f0;font-family:'Segoe UI';font-size:14px;}
@@ -579,6 +579,11 @@ class OverlayWindow(RemoteWindow):
         self.state_timer.setSingleShot(True)
         self.state_timer.setInterval(500)
         self.state_timer.timeout.connect(self.save_state)
+        self.settings_poll_pending = False
+        self.settings_timer = QTimer(self)
+        self.settings_timer.setInterval(1500)
+        self.settings_timer.timeout.connect(self.refresh_settings)
+        self.settings_timer.start()
         self.reader.verticalScrollBar().valueChanged.connect(self.schedule_save)
         self.setup_tray()
         self.documents = []
@@ -591,6 +596,7 @@ class OverlayWindow(RemoteWindow):
             QApplication.instance().aboutToQuit.connect(self.notebook.flush)
             self.notebook.attach.connect(self.attach_note)
             self.splitter.addWidget(self.notebook)
+            self.notebook.set_text_size(getattr(self, "appearance_settings", DEFAULTS)["font_size"])
         opening = not self.notes_open
         if opening:
             self.notes_previous_panels = (not self.left.isHidden(), not self.chat.isHidden())
@@ -649,16 +655,7 @@ class OverlayWindow(RemoteWindow):
         except ValueError as exc:
             self.error(str(exc))
             self.tray.showMessage("Горячие клавиши", str(exc))
-        self.setWindowOpacity(settings["opacity"])
-        self.appearance_settings = settings
-        style = STYLE.replace("font-size:14px", f"font-size:{settings['font_size']}px")
-        if settings.get("theme") == "light":
-            for dark, light in (("#111827", "#f0f4f8"), ("#e2e8f0", "#182b40"), ("#172235", "#ffffff"),
-                                ("#253348", "#d5e3f0"), ("#334155", "#a5b8ca"), ("#354967", "#b9d4ed"),
-                                ("#1e293b", "#e2eaf3"), ("#93c5fd", "#185e94")):
-                style = style.replace(dark, light)
-        self.setStyleSheet(style)
-        self.reader.setFont(QFont("Segoe UI", settings["font_size"]))
+        self.apply_appearance(settings)
         geometry = self.state.get("geometry")
         if geometry and len(geometry) == 4:
             self.setGeometry(*map(int, geometry))
@@ -674,6 +671,43 @@ class OverlayWindow(RemoteWindow):
             self.load_document(ident, restore_scroll=self.state.get("scroll", 0))
         self.restoring = False
         self.set_mode("view")
+
+    def apply_appearance(self, settings):
+        self.appearance_settings = dict(settings)
+        animation = getattr(self, "visibility_animation", None)
+        if not animation or animation.state() != QAbstractAnimation.Running:
+            self.setWindowOpacity(settings["opacity"])
+        style = STYLE.replace("font-size:14px", f"font-size:{settings['font_size']}px")
+        if settings.get("theme") == "light":
+            for dark, light in (("#111827", "#f0f4f8"), ("#e2e8f0", "#182b40"), ("#172235", "#ffffff"),
+                                ("#253348", "#d5e3f0"), ("#334155", "#a5b8ca"), ("#354967", "#b9d4ed"),
+                                ("#1e293b", "#e2eaf3"), ("#93c5fd", "#185e94")):
+                style = style.replace(dark, light)
+        self.setStyleSheet(style)
+        font = QFont("Segoe UI")
+        font.setPixelSize(settings["font_size"])
+        self.reader.setFont(font)
+        if self.notebook:
+            self.notebook.set_text_size(settings["font_size"])
+
+    def refresh_settings(self):
+        if self.restoring or self.closed or self.settings_poll_pending:
+            return
+        self.settings_poll_pending = True
+        def fetch():
+            try:
+                return rpc("settings")
+            except Exception:
+                return None
+        def receive(settings):
+            self.settings_poll_pending = False
+            if settings and settings != getattr(self, "appearance_settings", {}):
+                self.apply_appearance(settings)
+                try:
+                    self.hotkeys.configure(settings)
+                except ValueError as exc:
+                    self.error(str(exc))
+        self.task(fetch, receive)
 
     def refresh(self):
         self.call("documents", done=lambda values: (setattr(self, "documents", values), self.fill_documents()))
@@ -859,6 +893,11 @@ class OverlayWindow(RemoteWindow):
 
     def hotkey(self, action):
         current = foreground()
+        if native_owns_input(current) or (current == int(self.winId()) and native_owns_input(self.game_hwnd)):
+            self.hotkeys.set_active(False)
+            if self.isVisible():
+                self.hide_overlay()
+            return
         if current != int(self.winId()) and not belongs_to_game(current):
             return
         if belongs_to_game(current):
@@ -905,7 +944,10 @@ class OverlayWindow(RemoteWindow):
 
     def update_hotkey_scope(self):
         current = foreground()
-        active = (current == int(self.winId()) or belongs_to_game(current)) and QApplication.activeModalWidget() is None
+        native = native_owns_input(current) or (current == int(self.winId()) and native_owns_input(self.game_hwnd))
+        active = not native and (current == int(self.winId()) or belongs_to_game(current)) and QApplication.activeModalWidget() is None
+        if native and self.isVisible() and self.mode != "hidden":
+            self.hide_overlay()
         try:
             self.hotkeys.set_active(active, self.isVisible())
         except ValueError as exc:

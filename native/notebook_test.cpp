@@ -21,6 +21,8 @@ int main() {
     for(int font=14;font<=26;++font){
         ImGui::NewFrame();ImGui::SetNextWindowSize(ImVec2(500,350));ImGui::Begin("Test");
         ImGui::SetWindowFontScale(font/13.f);view.Layout(100);
+        assert(std::abs(view.fontSize-font)<.01f);
+        assert(std::abs(view.Advance(U'a')-ImGui::GetFont()->GetCharAdvance('a')*font/13.f)<.01f);
         assert(view.rows.size()>4);
         for(size_t r=0;r<view.rows.size();++r){
             auto row=view.rows[r];assert(row.end>=row.start);

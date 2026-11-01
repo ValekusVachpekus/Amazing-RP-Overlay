@@ -1,7 +1,15 @@
 #include "settings_panel.h"
+#include "navigation.h"
 #include <iostream>
 
 int main() {
+    TabNavigation tabs;
+    for(int cycle=0;cycle<100;++cycle){
+        tabs.Select(MainTab::Notebook);if(tabs.active!=MainTab::Notebook)return 20;
+        tabs.Select(MainTab::Settings);if(tabs.active!=MainTab::Settings || tabs.content!=MainTab::Notebook)return 21;
+        tabs.Select(MainTab::Notebook);if(tabs.active!=MainTab::Notebook)return 22;
+        tabs.Select(MainTab::Laws);if(tabs.active!=MainTab::Laws)return 23;
+    }
     Fade fade;
     if (std::abs(fade.Update(true, true, .1f) - .5f) > .001f) return 1;
     const float before = fade.position;

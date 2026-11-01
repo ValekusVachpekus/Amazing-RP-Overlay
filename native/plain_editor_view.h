@@ -14,10 +14,17 @@ struct EditorView {
     int active = -1;
     unsigned layoutRevision = ~0u, matchRevision = ~0u;
     float width = 0, fontSize = 0;
+    ImFont* cachedFont=nullptr;
     bool focused = false, reveal = false;
     float restoreScroll = -1;
+    float Advance(char32_t c) const {
+        auto* font=ImGui::GetFont();
+        const float ratio=ImGui::GetFontSize()/font->FontSize;
+        return (c==U'\t' ? font->GetCharAdvance(' ')*4 : font->GetCharAdvance(static_cast<ImWchar>(c<=65535 ? c : 0xfffd)))*ratio;
+    }
     void Layout(float available) {
-        if (layoutRevision == model.revision && width == available && fontSize == ImGui::GetFontSize()) return;
+        if (layoutRevision == model.revision && width == available && fontSize == ImGui::GetFontSize() && cachedFont==ImGui::GetFont()) return;
+        cachedFont=ImGui::GetFont();
         width = available; fontSize = ImGui::GetFontSize(); layoutRevision = model.revision;
         rows.clear(); positions.resize(model.text.size()+1);
         size_t start=0;
@@ -25,7 +32,7 @@ struct EditorView {
         auto append = [&](size_t end) { rows.push_back({start,end,Encode(model.text.substr(start,end-start))}); };
         for (size_t i=0; i < model.text.size(); ++i) {
             char32_t c = model.text[i];
-            float advance = c == U'\t' ? ImGui::GetFont()->GetCharAdvance(' ') * 4 : ImGui::GetFont()->GetCharAdvance(static_cast<ImWchar>(c <= 65535 ? c : 0xfffd));
+            float advance = Advance(c);
             if (c != U'\n' && x + advance > available && i > start) { append(i); start=i; x=0; }
             positions[i] = x;
             if (c == U'\n') { append(i); start=i+1; x=0; } else x += advance;
@@ -41,7 +48,7 @@ struct EditorView {
             if (rows[row].end == rows[row].start) return 0;
             auto end = rows[row].end;
             char32_t c = model.text[end-1];
-            return positions[end-1] + (c == U'\t' ? ImGui::GetFont()->GetCharAdvance(' ')*4 : ImGui::GetFont()->GetCharAdvance(static_cast<ImWchar>(c <= 65535 ? c : 0xfffd)));
+            return positions[end-1]+Advance(c);
         }
         return positions[at];
     }
@@ -156,7 +163,7 @@ struct EditorView {
             // Tabs are expanded for display using the same advances as hit tests.
             auto text=rows[row].utf8; size_t at=0;
             while ((at=text.find('\t',at))!=std::string::npos) { text.replace(at,1,"    "); at+=4; }
-            draw->AddText(ImVec2(origin.x,y),ImGui::GetColorU32(ImGuiCol_Text),text.c_str());
+            draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),ImVec2(origin.x,y),ImGui::GetColorU32(ImGuiCol_Text),text.c_str());
             if (interactive && focused && cursorRow==row && std::fmod(ImGui::GetTime(),1.0)<.6)
                 draw->AddLine(ImVec2(origin.x+X(model.cursor,row),y),ImVec2(origin.x+X(model.cursor,row),y+line),ImGui::GetColorU32(ImGuiCol_Text));
         }

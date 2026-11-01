@@ -202,8 +202,10 @@ public:
     bool Editing() const {return open && editor.focused;}
     Json conflict=Json::object();
     bool newRequested=false;
-    void Draw(bool interactive, const std::function<void(const std::string&)>& attach) {
+    void Draw(bool interactive, const std::function<void(const std::string&)>& attach, ImFont* font=nullptr) {
         if (!open) return;
+        if(font)ImGui::PushFont(font);
+        struct FontScope{bool pushed;~FontScope(){if(pushed)ImGui::PopFont();}} fontScope{font!=nullptr};
         ImGui::BeginChild("notebook",ImVec2(0,-26),ImGuiChildFlags_Borders);
         if (newRequested) {newRequested=false;Dialog("create",Parent()+"Новая заметка.txt");}
         if (ImGui::Button("Файлы")) ImGui::OpenPopup("notes-files");

@@ -40,12 +40,32 @@ if sys.platform == "win32":
     user32.IsWindow.argtypes = [wintypes.HWND]
     user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetPropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
+    user32.GetPropW.restype = wintypes.HANDLE
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetAncestor.restype = wintypes.HWND
     user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
     user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
 
 
 def foreground():
     return int(user32.GetForegroundWindow() or 0) if sys.platform == "win32" else 0
+
+
+def native_owns_input(hwnd):
+    """The injected client marks its own HWND; the property dies with that window."""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    for window in {hwnd, user32.GetAncestor(hwnd, 2), user32.GetAncestor(hwnd, 3)}:
+        if not window:
+            continue
+        owner = user32.GetPropW(window, "AmazingLawOverlay.NativeInputOwner.v1")
+        if owner:
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(window, ctypes.byref(pid))
+            if int(owner) == pid.value:
+                return True
+    return False
 
 
 def belongs_to_game(hwnd):

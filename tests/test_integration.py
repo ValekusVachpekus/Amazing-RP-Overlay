@@ -150,7 +150,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("First EndScene callback received", log)
         self.assertIn("Renderer initialized", log)
         capture = ROOT / ".cache/notebook-native-preview.bmp"
-        result = subprocess.run([str(binary), "--self-test", "--notebook"], cwd=binary.parent, timeout=20,
+        result = subprocess.run([str(binary), "--self-test", "--notebook", "--tabs"], cwd=binary.parent, timeout=20,
                                 env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name, AMAZING_OVERLAY_CAPTURE=str(capture)),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
@@ -201,10 +201,70 @@ class IntegrationTest(unittest.TestCase):
                 self.assertTrue(window.grab().save(str(output)))
             finally:
                 window.scope_timer.stop()
+                window.settings_timer.stop()
                 window.timer.stop()
                 window.hotkeys.clear()
                 window.tray.hide()
                 window.save_state()
+                self.events_until(lambda: not window.work)
+                window.closed = True
+                window.hide()
+
+    def test_external_releases_hotkeys_to_native_and_updates_notebook_font(self):
+        from amazing_overlay.ui import OverlayWindow
+        from amazing_overlay import win32
+        from ctypes import wintypes
+        with patch("amazing_overlay.ui.set_input"), patch("amazing_overlay.ui.Hotkeys"):
+            window = OverlayWindow()
+            try:
+                self.events_until(lambda: not window.restoring)
+                window.toggle_notebook(force=True)
+                self.events_until(lambda: window.notebook.root_path != '')
+                settings = rpc('settings')
+                settings['font_size'] = 26
+                window.apply_appearance(settings)
+                self.assertEqual(window.notebook.editor.font().pixelSize(), 26)
+                self.assertEqual(window.notebook.editor.document().defaultFont().pixelSize(), 26)
+                self.assertEqual(window.reader.font().pixelSize(), 26)
+                rpc('settings_save', {'font_size': 14})
+                window.refresh_settings()
+                self.events_until(lambda: window.notebook.editor.font().pixelSize() == 14)
+                with patch('amazing_overlay.ui.foreground', return_value=1234), patch('amazing_overlay.ui.belongs_to_game', return_value=True), patch('amazing_overlay.ui.native_owns_input', return_value=True):
+                    window.hotkeys.reset_mock()
+                    window.update_hotkey_scope()
+                    self.assertFalse(window.hotkeys.set_active.call_args.args[0])
+                    with patch.object(window, 'toggle_notebook') as opened:
+                        window.hotkey('notes')
+                        opened.assert_not_called()
+                with patch('amazing_overlay.ui.foreground', return_value=1234), patch('amazing_overlay.ui.belongs_to_game', return_value=True), patch('amazing_overlay.ui.native_owns_input', return_value=False):
+                    window.update_hotkey_scope()
+                    self.assertTrue(window.hotkeys.set_active.call_args.args[0])
+                if sys.platform == 'win32':
+                    import ctypes
+                    # Qt's offscreen winId isn't an HWND. Use our own invisible
+                    # Win32 STATIC window to exercise the actual property API.
+                    win32.user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+                                                            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                                            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, ctypes.c_void_p]
+                    win32.user32.CreateWindowExW.restype = wintypes.HWND
+                    win32.user32.DestroyWindow.argtypes = [wintypes.HWND]
+                    handle = win32.user32.CreateWindowExW(0, 'STATIC', 'Ownership test', 0, 0, 0, 1, 1, None, None, None, None)
+                    self.assertTrue(handle)
+                    win32.user32.SetPropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.HANDLE]
+                    win32.user32.RemovePropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
+                    prop = 'AmazingLawOverlay.NativeInputOwner.v1'
+                    self.assertTrue(win32.user32.SetPropW(handle, prop, os.getpid()))
+                    try:
+                        self.assertTrue(win32.native_owns_input(handle))
+                    finally:
+                        win32.user32.RemovePropW(handle, prop)
+                    self.assertFalse(win32.native_owns_input(handle))
+                    win32.user32.DestroyWindow(handle)
+            finally:
+                window.scope_timer.stop()
+                window.settings_timer.stop()
+                window.timer.stop()
+                window.tray.hide()
                 self.events_until(lambda: not window.work)
                 window.closed = True
                 window.hide()

@@ -3,6 +3,7 @@
 #include <d3d9.h>
 #include <fstream>
 #include <vector>
+#include <cmath>
 
 void Capture(IDirect3DDevice9* device) {
     wchar_t path[32768]{};
@@ -56,6 +57,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     using SettingsPreview = void(__cdecl*)(int, int);
     auto settingsPreview = reinterpret_cast<SettingsPreview>(GetProcAddress(library, "AmazingOverlaySettingsForTest"));
     auto notebookPreview = reinterpret_cast<Show>(GetProcAddress(library, "AmazingOverlayNotebookForTest"));
+    using SelectTab=void(__cdecl*)(unsigned);
+    using NoteFont=float(__cdecl*)();
+    auto selectTab=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayTabForTest"));
+    auto activeTab=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayActiveTabForTest"));
+    auto noteFont=reinterpret_cast<NoteFont>(GetProcAddress(library,"AmazingOverlayNoteFontForTest"));
+    unsigned tabFrames=0;
     bool previewedNotebook=false;
     bool previewedSettings = false;
     using Diagnostics = void(__cdecl*)(char*, unsigned);
@@ -73,6 +80,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         device->Present(nullptr, nullptr, nullptr, nullptr);
         if (selfTest) {
             if (probe() & 1u) show();
+            if(probe()==3u && wcsstr(command,L"--tabs")){
+                if(!selectTab || !activeTab || !noteFont || !settingsPreview)return 9;
+                ++tabFrames;
+                if(tabFrames==1){settingsPreview(26,0);selectTab(1);}
+                if(tabFrames==30 && (activeTab()!=1 || fabsf(noteFont()-26)>0.1f))return 10;
+                if(tabFrames==31){settingsPreview(14,0);selectTab(1);}
+                if(tabFrames==60 && (activeTab()!=1 || fabsf(noteFont()-14)>0.1f))return 11;
+                if(tabFrames==61){settingsPreview(26,0);selectTab(1);}
+                if(tabFrames==90 && (activeTab()!=1 || fabsf(noteFont()-26)>0.1f))return 12;
+                if(tabFrames==91)selectTab(0);
+                if(tabFrames==92 && activeTab()!=0)return 13;
+                if(tabFrames==93)selectTab(2);
+                if(tabFrames==94 && activeTab()!=2)return 14;
+                if(tabFrames==95)selectTab(1);
+                if(reinterpret_cast<ULONG_PTR>(GetPropW(window,L"AmazingLawOverlay.NativeInputOwner.v1"))!=GetCurrentProcessId())return 15;
+            }
             if(!previewedNotebook && notebookPreview && probe()==3u && wcsstr(command,L"--notebook")){
                 notebookPreview();previewedNotebook=true;
             }

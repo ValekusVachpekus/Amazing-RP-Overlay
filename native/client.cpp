@@ -3,6 +3,7 @@
 #include "display_text.h"
 #include "settings_panel.h"
 #include "notebook_panel.h"
+#include "navigation.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <dinput.h>
@@ -61,6 +62,8 @@ WNDPROC previousProc = nullptr;
 IDirect3DDevice9* activeDevice = nullptr;
 bool initialized = false;
 SettingsPanel settingsPanel;
+TabNavigation navigation;
+constexpr wchar_t NativeInputOwner[]=L"AmazingLawOverlay.NativeInputOwner.v1";
 notebook::NotebookPanel& Notebook() { static auto* value=new notebook::NotebookPanel();return *value; }
 std::atomic<bool> flushNotebook{false};
 std::array<ImFont*, 13> uiFonts{};
@@ -133,6 +136,15 @@ bool Enqueue(std::function<void()> work) {
 bool Down(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
 bool Pressed(const Binding& binding) {
     return Down(binding.key) && Down(VK_CONTROL) == binding.ctrl && Down(VK_MENU) == binding.alt && Down(VK_SHIFT) == binding.shift && (Down(VK_LWIN) || Down(VK_RWIN)) == binding.win;
+}
+
+void SelectTab(MainTab tab, bool programmatic=true) {
+    auto& notebook=Notebook();
+    if(navigation.active==MainTab::Notebook && tab!=MainTab::Notebook)notebook.Flush();
+    navigation.Select(tab,programmatic);
+    notebook.open=tab==MainTab::Notebook;
+    if(tab==MainTab::Notebook)notebook.Open();
+    if(tab==MainTab::Settings && !settingsPanel.open)settingsPanel.Open();
 }
 
 void SetMode(Mode next, bool restoreClip = true) {
@@ -358,7 +370,7 @@ void Draw() {
     bool n=focused && Pressed(notes);
     if(n && !previousNotes) {
         if(notebook.Editing() && mode==Mode::Input) notebook.NewNote();
-        else {notebook.Open();showList=false;SetMode(Mode::Input);}
+        else {SelectTab(MainTab::Notebook);SetMode(Mode::Input);}
     }
     previousNotes=n;
     bool t = focused && Pressed(toggle), i = focused && Pressed(input), e = focused && Down(VK_ESCAPE);
@@ -366,16 +378,18 @@ void Draw() {
     if (i && !previousInput) SetMode(mode == Mode::Input ? Mode::View : Mode::Input);
     if (e && !previousEscape && mode != Mode::Hidden) {
         if(ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId)) { /* popup owns Esc */ }
-        else if(notebook.open && notebook.Escape()) { }
+        else if(navigation.active==MainTab::Notebook && notebook.Escape()) { }
+        else if(navigation.active==MainTab::Settings && !settingsPending && !testing) {
+            settingsPanel.Cancel();SelectTab(navigation.content);
+        }
         else {
-            if (settingsPanel.open && !settingsPending && !testing) settingsPanel.Cancel();
             SetMode(mode == Mode::Input ? Mode::View : Mode::Hidden);
         }
     }
     previousToggle = t; previousInput = i; previousEscape = e;
     bool left = focused && Pressed(previousLaw), right = focused && Pressed(nextLaw);
     bool up = focused && Pressed(scrollUp), down = focused && Pressed(scrollDown);
-    if (mode != Mode::Hidden && !notebook.Editing() && ((left && !previousLeft) || (right && !previousRight))) {
+    if (mode != Mode::Hidden && navigation.active==MainTab::Laws && ((left && !previousLeft) || (right && !previousRight))) {
         std::vector<std::string> ids;
         for (const auto& item : searching ? hits : documents) ids.push_back(item.value(searching ? "doc_id" : "id", ""));
         auto target = overlay_input::NextDocument(ids, selectedId, right && !previousRight ? 1 : -1);
@@ -383,12 +397,13 @@ void Draw() {
     }
     float scrollDelta = 0;
     const auto ticks = GetTickCount64();
-    if (mode != Mode::Hidden && !notebook.Editing() && (up || down) && ((!previousUp && up) || (!previousDown && down) || ticks - lastScrollRepeat >= 100)) {
+    if (mode != Mode::Hidden && navigation.active==MainTab::Laws && (up || down) && ((!previousUp && up) || (!previousDown && down) || ticks - lastScrollRepeat >= 100)) {
         scrollDelta = down ? 100.0f : -100.0f;
         lastScrollRepeat = ticks;
     }
     previousLeft = left; previousRight = right; previousUp = up; previousDown = down;
     if (!focused && mode == Mode::Input) SetMode(Mode::Hidden, false);
+    if(navigation.active==MainTab::Settings && !settingsPanel.open)settingsPanel.Open();
     const Appearance appearance = settingsPanel.Current();
     const float fade = visibility.Update(mode != Mode::Hidden, appearance.animations, ImGui::GetIO().DeltaTime);
     if (fade <= 0) return;
@@ -399,7 +414,7 @@ void Draw() {
     if (mode == Mode::Input) ClipCursor(nullptr);
     const auto screen = ImGui::GetIO().DisplaySize;
     const ImVec2 maximum(std::max(320.f, screen.x - 24), std::max(260.f, screen.y - 24));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(maximum.x, (settingsPanel.open ? 750.f : showChat ? (showList ? 1100.f : 900.f) : showList ? 800.f : 660.f) * scale), std::min(maximum.y, 440 * scale)), maximum);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(maximum.x, (navigation.active==MainTab::Settings ? 750.f : notebook.open ? 850.f : showChat ? (showList ? 1100.f : 900.f) : showList ? 800.f : 660.f) * scale), std::min(maximum.y, 440 * scale)), maximum);
     ImGui::SetNextWindowSize(ImVec2(1100, 720), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(60, 80), ImGuiCond_FirstUseEver);
     ImGuiWindowFlags flags = mode == Mode::Input ? 0 : ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove;
@@ -419,17 +434,26 @@ void Draw() {
         const float right=ImGui::GetWindowPos().x+ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-ImGui::GetStyle().ScrollbarSize;
         if(ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+nextWidth*scale<=right)ImGui::SameLine();
     };
-    if (ImGui::Button(showList ? "Законы: открыты" : "Законы", ImVec2(160 * scale, 36 * scale))) { showList = !showList; savePanels(); }
-    headerLine(145); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145 * scale, 36 * scale))) { showChat = !showChat; savePanels(); }
-    headerLine(150); if(ImGui::Button(notebook.open ? "Блокнот: открыт" : "Блокнот", ImVec2(150*scale,36*scale))) {
-        if(notebook.open){notebook.Flush();notebook.open=false;}else {notebook.Open();showList=false;}
+    const auto requestedTab=navigation.active;const bool forceTab=navigation.requestSelection;
+    if(ImGui::BeginTabBar("main-tabs",ImGuiTabBarFlags_FittingPolicyScroll)){
+        for(auto tab:{MainTab::Laws,MainTab::Notebook,MainTab::Settings}){
+            const char* label=tab==MainTab::Laws ? "Законы" : tab==MainTab::Notebook ? "Блокнот" : "Настройки";
+            if(ImGui::BeginTabItem(label,nullptr,forceTab && tab==requestedTab ? ImGuiTabItemFlags_SetSelected : 0)){
+                if((!forceTab || tab==requestedTab) && navigation.active!=tab)SelectTab(tab,false);
+                ImGui::EndTabItem();
+            }
+        }
+        ImGui::EndTabBar();
     }
+    navigation.requestSelection=false;
+    if (ImGui::Button(showList ? "Список: открыт" : "Список", ImVec2(160 * scale, 36 * scale))) { SelectTab(MainTab::Laws);showList = !showList; savePanels(); }
+    headerLine(145); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145 * scale, 36 * scale))) { SelectTab(MainTab::Laws);showChat = !showChat; savePanels(); }
     headerLine(110); if (ImGui::Button("Обновить", ImVec2(110 * scale, 36 * scale))) Refresh();
     headerLine(95); if (ImGui::Button("Скрыть", ImVec2(95 * scale, 36 * scale))) SetMode(Mode::Hidden);
     headerLine(36);
     const auto gearPosition = ImGui::GetCursorScreenPos();
     if (ImGui::InvisibleButton("settings-gear", ImVec2(36 * scale, 36 * scale)) && !settingsPending && !testing) {
-        if (settingsPanel.open) settingsPanel.Cancel(); else { settingsPanel.Open(); SetMode(Mode::Input); }
+        SelectTab(MainTab::Settings); SetMode(Mode::Input);
         Enqueue([] { auto value = Rpc("settings"); std::lock_guard<std::mutex> lock(S().mutex); S().settings = value; ++S().settingsRevision; });
     }
     auto* gearDraw = ImGui::GetWindowDrawList();
@@ -445,7 +469,7 @@ void Draw() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Настройки");
     ImGui::TextDisabled("%s", mode == Mode::Input ? "Ввод / Esc: просмотр" : "Просмотр / Alt+F: ввод");
-    if (settingsPanel.open) {
+    if (navigation.active==MainTab::Settings) {
         const auto action = settingsPanel.Draw(settingsPending, testing, settingsMessage);
         if (action == SettingsPanel::Action::Save || action == SettingsPanel::Action::Test) {
             const Json values = settingsPanel.Values();
@@ -464,16 +488,17 @@ void Draw() {
         } else if (action == SettingsPanel::Action::CancelTest) {
             Enqueue([] { std::string job; { std::lock_guard<std::mutex> lock(S().mutex); job = S().testJob; } if (!job.empty()) Rpc("job_cancel", {{"id", job}}); });
         }
+        if(!settingsPanel.open)SelectTab(navigation.content);
         ImGui::End();
         return;
     }
     auto attachNote=[&](const std::string& text){
         if(text.size()>=sizeof(question)){Status("Для чата выделите меньший фрагмент");return;}
         if(question[0]){Status("В чате уже есть черновик. Скопируйте или очистите его перед добавлением заметки");return;}
-        memcpy(question,text.c_str(),text.size()+1);showChat=true;notebook.Flush();notebook.open=false;
+        memcpy(question,text.c_str(),text.size()+1);showChat=true;SelectTab(MainTab::Laws);
     };
     if(notebook.open && !notebook.beside) {
-        notebook.Draw(mode==Mode::Input,attachNote);
+        notebook.Draw(mode==Mode::Input,attachNote,uiFonts[appearance.font-14]);
         ImGui::End();return;
     }
     ImGui::Spacing();
@@ -513,7 +538,7 @@ void Draw() {
         });
         if (!query.empty()) showList = true;
     }
-    if (showList) {
+    if (showList && !notebook.open) {
         const float listWidth = std::clamp(ImGui::GetContentRegionAvail().x * .27f, 220.0f * scale, 340.0f * scale);
         ImGui::BeginChild("laws", ImVec2(listWidth, -30), ImGuiChildFlags_Borders);
         ImGui::TextDisabled(searching ? "РЕЗУЛЬТАТЫ ПОИСКА" : "БИБЛИОТЕКА ЗАКОНОВ");
@@ -566,7 +591,7 @@ void Draw() {
         ImGui::SameLine();ImGui::InvisibleButton("reader-notes-split",ImVec2(5,readerHeight));
         if(mode==Mode::Input && ImGui::IsItemActive())notebook.lawFraction=std::clamp(notebook.lawFraction+ImGui::GetIO().MouseDelta.x/readerAvailable,.25f,.7f);
         if(ImGui::IsItemHovered())ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        ImGui::SameLine();notebook.Draw(mode==Mode::Input,attachNote);
+        ImGui::SameLine();notebook.Draw(mode==Mode::Input,attachNote,uiFonts[appearance.font-14]);
     }
     if (showChat && !besideNotes) {
         ImGui::SameLine();
@@ -654,6 +679,7 @@ HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
             return originalEnd(device);
         }
         initialized = true;
+        if(!SetPropW(gameWindow,NativeInputOwner,reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(GetCurrentProcessId()))))Log("WARNING: could not publish native hotkey ownership");
         Log("Renderer initialized; Ctrl+L shows panel; Alt+F enables input");
     }
     if (device == activeDevice) {
@@ -793,13 +819,19 @@ extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayVisibilityForTes
 }
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlaySettingsForTest(int font, int light) {
-    settingsPanel.Open(); settingsPanel.draft.font = std::clamp(font, 14, 26);
+    SelectTab(MainTab::Settings); settingsPanel.draft.font = std::clamp(font, 14, 26);
     settingsPanel.draft.light = light != 0;
 }
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayNotebookForTest() {
-    Notebook().Open();Notebook().beside=false;
+    SelectTab(MainTab::Notebook);Notebook().beside=false;
 }
+
+extern "C" __declspec(dllexport) void __cdecl AmazingOverlayTabForTest(unsigned tab) {
+    if(tab<=2)SelectTab(static_cast<MainTab>(tab));
+}
+extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayActiveTabForTest() {return static_cast<unsigned>(navigation.active);}
+extern "C" __declspec(dllexport) float __cdecl AmazingOverlayNoteFontForTest() {return Notebook().editor.fontSize;}
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayDiagnostics(char* buffer, unsigned size) {
     std::lock_guard<std::mutex> lock(S().mutex);

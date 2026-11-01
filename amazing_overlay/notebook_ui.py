@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QKeySequence, QShortcut, QTextCursor, QTextDocument
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeWidget, QTreeWidgetItem,
                               QLineEdit, QPlainTextEdit, QPushButton, QLabel, QInputDialog, QMessageBox,
                               QMenu, QTextEdit)
@@ -110,6 +110,13 @@ class NotebookWidget(QWidget):
 
     def call(self, function, done=lambda value: None, failed=None):
         return background(function, done, failed or self.error)
+
+    def set_text_size(self, size):
+        font = QFont("Segoe UI")
+        font.setPixelSize(int(size))
+        self.setFont(font)
+        self.editor.setFont(font)
+        self.editor.document().setDefaultFont(font)
 
     def error(self, message):
         self.status.setText("Ошибка: " + str(message))
