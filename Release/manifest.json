@@ -1,22 +1,22 @@
 {
   "format": 1,
-  "source_revision": "280b73b66cd6c64cd170e41e7fb537e51b02311c",
+  "source_revision": "cc6213cb342f5297086c28cf4caf54b7ceaf8477",
   "files": {
     "AmazingLawClient.asi": {
       "bytes": 1021952,
-      "sha256": "7f89ae7f07cdc50c64607401aff87e264f0537bafb06bdef67a391373ce91c99"
+      "sha256": "4f235a3a2ed4bf557f0a39171735a74d8e432b1210c5654fc4cf18a18c23e853"
     },
     "AmazingLawClient.dll": {
       "bytes": 1021952,
-      "sha256": "7f89ae7f07cdc50c64607401aff87e264f0537bafb06bdef67a391373ce91c99"
+      "sha256": "4f235a3a2ed4bf557f0a39171735a74d8e432b1210c5654fc4cf18a18c23e853"
     },
     "AmazingLawOverlay.exe": {
-      "bytes": 5561326,
-      "sha256": "dada0e8707231910eb67e2014007bbd576f739461c9d4e2eea5450fda4d46c18"
+      "bytes": 5570903,
+      "sha256": "49d60dd33b292a70f661386dd8117a2a93c67e1462e9f91105860495c694279a"
     },
     "README.md": {
-      "bytes": 5844,
-      "sha256": "ed236bd9d3cd3c656c08cca19e98ab47cb5f909aeffd9d149e3fc8676bc3b34c"
+      "bytes": 6589,
+      "sha256": "eece6a868607940e9301d85770c5a04824631540926bd9b2dd6f066aaf8fb503"
     },
     "_internal/PySide6/MSVCP140.dll": {
       "bytes": 549176,
@@ -93,6 +93,10 @@
     "_internal/PySide6/QtNetwork.pyd": {
       "bytes": 1009464,
       "sha256": "c5038bb71fc9d57330fa2d8eeec65aab69fcf02687cc8f54dbfb5995cfec6a71"
+    },
+    "_internal/PySide6/QtSvg.pyd": {
+      "bytes": 116024,
+      "sha256": "2d128bbd2839aaad93f96d4d0705912065d2dcc20c92cb028f0441979bdb7280"
     },
     "_internal/PySide6/QtWidgets.pyd": {
       "bytes": 4857656,
@@ -650,6 +654,18 @@
       "bytes": 44824,
       "sha256": "e48336ad990797fa0c8a902ba2cca6966ea3bf13c2d3b021f1673ca13455d862"
     },
+    "_internal/amazing_overlay/assets/check.svg": {
+      "bytes": 204,
+      "sha256": "57e793f572bc0972445206afb728fb1696a9711b1615b11d14346af789e94dcf"
+    },
+    "_internal/amazing_overlay/assets/down.svg": {
+      "bytes": 211,
+      "sha256": "2a9d226b0327ac47c42c429fd016ffaef0dee6e13622f4359b9488b933417c3d"
+    },
+    "_internal/amazing_overlay/assets/up.svg": {
+      "bytes": 211,
+      "sha256": "d51062946bc62061c9e918b8ec1fbdde01c548e347cfaf9edaba8e483b859ccd"
+    },
     "_internal/api-ms-win-core-console-l1-1-0.dll": {
       "bytes": 13736,
       "sha256": "0099f17128d1551a47cbd39ce702d4acc4b49be1bb1cfe974fe5a42da01d88eb"
@@ -804,7 +820,7 @@
     },
     "_internal/base_library.zip": {
       "bytes": 880569,
-      "sha256": "016fb77b6c3f089a7de9387864647995537b9e7e30606cf74c0cf2ad0a01aa77"
+      "sha256": "141ad99528ce126a9f9166232e3cfce9f05312e0e975cfc3e8bbc2cc691a663d"
     },
     "_internal/bs4/__init__.py": {
       "bytes": 44562,
@@ -7831,16 +7847,16 @@
       "sha256": "37f111da2729c3bef90f33dfd4d9d77a4f79705cbddcf0b8cf482ef25d118a48"
     },
     "docs/NOTEBOOK.md": {
-      "bytes": 6692,
-      "sha256": "6f21d756b81a4b4c8b5cfc9fe756803657c968814a0bf69902814e4378d3ae1d"
+      "bytes": 6758,
+      "sha256": "29853c88ca79185407e3ee28da3837c241919b8f5a9221fcc3d5dbc06d372d58"
     },
     "docs/PROTOCOL.md": {
-      "bytes": 5482,
-      "sha256": "bf2e04ad5595e6ef0c5d7af7ee4119e7cac6dcb5d3342cf7ef55009e42f4e2b4"
+      "bytes": 6076,
+      "sha256": "fbf600f53df27fa5b984fea29dbd0017b932e1a52d97e0e2ff64b93f1df78dc4"
     },
     "docs/V2.md": {
-      "bytes": 20007,
-      "sha256": "be3ae7598073212dd72dbbd003306d7b3e4c9eef96d213507ed0826705033f7b"
+      "bytes": 21619,
+      "sha256": "f2cc8f2cdf7eb1305e453af40261d4bc6822cbeee0e3828ea896f89944a16701"
     },
     "licenses/PySide6/LicenseRef-Qt-Commercial.txt": {
       "bytes": 470,
