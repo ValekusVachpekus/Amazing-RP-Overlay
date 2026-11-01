@@ -1,18 +1,18 @@
 {
   "format": 1,
-  "source_revision": "0ee7801f04d00278e7f19c9cc1b915ad1017305e",
+  "source_revision": "280b73b66cd6c64cd170e41e7fb537e51b02311c",
   "files": {
     "AmazingLawClient.asi": {
-      "bytes": 1025024,
-      "sha256": "112f25309efb53c1cdd93ab0b810f387ed9c82d87cd54f3bd7f4fb04815f3ea2"
+      "bytes": 1021952,
+      "sha256": "7f89ae7f07cdc50c64607401aff87e264f0537bafb06bdef67a391373ce91c99"
     },
     "AmazingLawClient.dll": {
-      "bytes": 1025024,
-      "sha256": "112f25309efb53c1cdd93ab0b810f387ed9c82d87cd54f3bd7f4fb04815f3ea2"
+      "bytes": 1021952,
+      "sha256": "7f89ae7f07cdc50c64607401aff87e264f0537bafb06bdef67a391373ce91c99"
     },
     "AmazingLawOverlay.exe": {
-      "bytes": 5560654,
-      "sha256": "ebb8d14a2d7c8e06d1668b4b40d97c4aa3a6bf8a2ac990b6440f5c35ae982ebb"
+      "bytes": 5561326,
+      "sha256": "dada0e8707231910eb67e2014007bbd576f739461c9d4e2eea5450fda4d46c18"
     },
     "README.md": {
       "bytes": 5844,
@@ -804,7 +804,7 @@
     },
     "_internal/base_library.zip": {
       "bytes": 880569,
-      "sha256": "d6fbd17635985bd44f9f90fa7d0233a1178154fd34912c7ca96dc8fc289638c4"
+      "sha256": "016fb77b6c3f089a7de9387864647995537b9e7e30606cf74c0cf2ad0a01aa77"
     },
     "_internal/bs4/__init__.py": {
       "bytes": 44562,
@@ -7827,12 +7827,12 @@
       "sha256": "1fb2d66c056f69e8bbdd8c6c910e72697874dae680264f8fb4b4df19af98aa2e"
     },
     "docs/GAME_ACCEPTANCE.md": {
-      "bytes": 6139,
-      "sha256": "e35ad742c663677d9b2ef234243a4685225e883f61601cc9e9569326f43f7f71"
+      "bytes": 7122,
+      "sha256": "37f111da2729c3bef90f33dfd4d9d77a4f79705cbddcf0b8cf482ef25d118a48"
     },
     "docs/NOTEBOOK.md": {
-      "bytes": 6298,
-      "sha256": "b58c6900be7491eab6af2092d97e96ce34f6d45af6643d882cbc0ee6141ce6f3"
+      "bytes": 6692,
+      "sha256": "6f21d756b81a4b4c8b5cfc9fe756803657c968814a0bf69902814e4378d3ae1d"
     },
     "docs/PROTOCOL.md": {
       "bytes": 5482,
