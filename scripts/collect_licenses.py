@@ -1,13 +1,17 @@
 """Collect installed dependency notices into a portable build."""
 import importlib.metadata
+import argparse
 import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "dist" / "AmazingLawOverlay" / "licenses"
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bundle-path", type=Path, default=ROOT / "dist" / "AmazingLawOverlay")
+    args = parser.parse_args()
+    OUTPUT = args.bundle_path.resolve() / "licenses"
     OUTPUT.mkdir(parents=True, exist_ok=True)
     for distribution in importlib.metadata.distributions():
         name = distribution.metadata.get("Name", "unknown")

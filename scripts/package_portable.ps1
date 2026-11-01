@@ -18,11 +18,13 @@ $nativeCandidates = @(
 ) | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-Item -LiteralPath $_ }
 $newestNative = $nativeCandidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $nativeDirectory = if ($newestNative) { $newestNative.DirectoryName } else { '' }
+if (-not $nativeDirectory) { throw 'Build the native client before packaging the complete release.' }
 foreach ($artifactName in @('AmazingLawClient.dll', 'AmazingLawClient.asi')) {
-    if (-not $nativeDirectory) { continue }
     $artifactPath = Join-Path $nativeDirectory $artifactName
     if (Test-Path -LiteralPath $artifactPath) {
         Copy-Item -LiteralPath $artifactPath -Destination $bundleDirectory
+    } else {
+        throw "Missing native artifact: $artifactPath"
     }
 }
 Write-Output "Portable package: $bundleDirectory"

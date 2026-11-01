@@ -14,3 +14,8 @@ dist/
 .vs/
 native/out/
 native/out-local/
+/Release/config.json
+/Release/urls.txt
+/Release/laws/
+/Release/browser-profile/
+/Release/*.log

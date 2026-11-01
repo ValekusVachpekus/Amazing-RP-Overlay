@@ -7,7 +7,10 @@
 - `run_overlay.bat` — внешний клиент; сам подключает/запускает бэкенд.
 - `run_backend.bat` — самостоятельный сервис.
 - `build_native.bat` — сборка ASI/DLL для Direct3D 9.
-- `build_portable.bat` — переносимый комплект без Python у пользователей.
+- `build_portable.bat` — сборка обоих клиентов и переносимого комплекта в `Release/`.
+
+**[Готовый комплект для скачивания и запуска — Release](Release/README.md)**.
+Передавайте всю папку `Release`, включая `_internal`; Python пользователям не нужен.
 
 **[Запуск, архитектура и ограничения v2](docs/V2.md)** ·
 [Локальный API](docs/PROTOCOL.md) · [Проверка в игре](docs/GAME_ACCEPTANCE.md)

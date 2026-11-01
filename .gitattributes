@@ -1,0 +1,2 @@
+# Preserve exact release bytes on clone/checkout (SHA256 manifest).
+/Release/** -text
