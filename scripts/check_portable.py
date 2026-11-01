@@ -34,6 +34,9 @@ def main():
             else:
                 raise AssertionError("Frozen backend did not start")
             assert health["version"] == 1
+            assert health.get("shutdown"), "Update the backend for launcher stop support"
+            for asset in ("check.svg", "up.svg", "down.svg"):
+                assert (executable.parent / '_internal/amazing_overlay/assets' / asset).is_file(), f"Missing desktop asset: {asset}"
             assert health["documents"] == 0, "Release must not contain local laws"
             assert not rpc("settings")["has_api_key"], "Release must not contain a local credential"
             assert "ai_api_key" not in rpc("settings")
@@ -84,6 +87,11 @@ def main():
                     if client.poll() is None:
                         client.terminate()
                     client.wait(timeout=10)
+            from amazing_overlay.transport import stop_backend
+            stop_backend(timeout=15)
+            process.wait(timeout=10)
+            assert process.returncode == 0, "Backend must exit cleanly after launcher shutdown"
+            print("PORTABLE GRACEFUL STOP: PASS")
         finally:
             process.terminate()
             process.wait(timeout=10)

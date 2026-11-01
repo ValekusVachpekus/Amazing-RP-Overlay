@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(AmazingLawClient VERSION 2.2.2 LANGUAGES C CXX)
+project(AmazingLawClient VERSION 2.3.0 LANGUAGES C CXX)
 enable_testing()
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
   message(FATAL_ERROR "The installed Amazing client is x86. Configure with -A Win32.")

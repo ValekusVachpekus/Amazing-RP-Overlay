@@ -21,7 +21,8 @@ There is no arbitrary Python execution endpoint.
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| health | — | version, app_version, documents, data_dir, browsers_dir, import_warnings |
+| health | — | version, app_version, documents, data_dir, browsers_dir, import_warnings, shutdown, stopping |
+| shutdown | — | stopping:true; cancel jobs, finish in-flight RPC/file writes and exit normally |
 | documents | — | document metadata array |
 | document | id | document tree and sanitized HTML |
 | search | query, optional doc_ids, limit | ranked section hits including snippet/post_id/heading |
@@ -49,6 +50,13 @@ Progress is the latest snapshot, not an append-only event stream. AI progress
 includes the accumulated answer and source metadata. No API keys are returned.
 The backend retains a bounded number of completed jobs and at most 8 active jobs.
 Cancellation is cooperative; a current network read is bounded by its timeout.
+
+`health.shutdown: true` advertises graceful stop support (2.3+). `shutdown` is
+available only through the same current-user local pipe. After acknowledgment,
+new operations are rejected; `health` remains reachable with `stopping:true`
+until accepted requests and cancelled jobs finish. The launcher waits for the
+pipe to close, without terminating processes. Closing the launcher does not stop
+the backend. Older services must be updated before using this command.
 
 Document tree v1:
 

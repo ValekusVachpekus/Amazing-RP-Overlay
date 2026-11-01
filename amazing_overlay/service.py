@@ -25,6 +25,7 @@ class Backend:
         self.browser_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="backend-job")
         self.jobs = {}
+        self.stopping = threading.Event()
         self.notes = Notes(root, data, load_settings)
         self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws")
         urls = root / "local" / "urls.txt" if (root / "local" / "urls.txt").exists() else root / "urls.txt"
@@ -69,8 +70,18 @@ class Backend:
 
     def dispatch(self, method, params):
         if method == "health":
-            return {"version": 1, "app_version": __version__, "native_settings": True, "notes": True, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
+            return {"version": 1, "app_version": __version__, "native_settings": True, "notes": True,
+                    "shutdown": True, "stopping": self.stopping.is_set(),
+                    "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
                     "browsers_dir": configure_browser_environment(), "import_warnings": self.import_warnings}
+        if method == "shutdown":
+            self.stopping.set()
+            with self.lock:
+                for job in self.jobs.values():
+                    job["cancel"].set()
+            return {"stopping": True}
+        if self.stopping.is_set():
+            raise ValueError("Бэкенд останавливается. Дождитесь завершения и запустите его снова.")
         if method.startswith("notes_"):
             return self.notes.dispatch(method, params)
         if method == "documents":
@@ -159,6 +170,7 @@ class Backend:
         raise ValueError("Неизвестный метод API")
 
     def close(self):
+        self.stopping.set()
         with self.lock:
             for job in self.jobs.values():
                 job["cancel"].set()

@@ -131,6 +131,12 @@ class IntegrationTest(unittest.TestCase):
         try:
             self.events_until(lambda: 'Бэкенд работает' in window.status.text())
             self.assertIn('Автор: Vladislav_Shetkov', window.windowTitle())
+            self.assertFalse(window.start_button.isEnabled())
+            self.assertTrue(window.stop_button.isEnabled())
+            with patch('amazing_overlay.launcher.open_folder') as opened:
+                window.open_laws()
+                opened.assert_called_once_with(self.temporary.name)
+            # Late worker callbacks after closing must not touch a deleted window.
             self.assertTrue(window.grab().save(str(ROOT / '.cache/launcher-preview.png')))
         finally:
             window.timer.stop()
@@ -167,6 +173,7 @@ class IntegrationTest(unittest.TestCase):
         try:
             window.show()
             self.events_until(lambda: bool(window.source_values))
+            self.assertIn("Автор: Vladislav_Shetkov", window.windowTitle())
             self.assertEqual(window.tabs.count(), 5)
             self.assertGreater(window.sources.rowCount(), 0)
             self.assertIn("Ключ", window.env_label.text())
@@ -176,6 +183,96 @@ class IntegrationTest(unittest.TestCase):
         finally:
             window.close()
             self.events_until(lambda: not window.work)
+
+    def test_manager_header_drag_filter_and_saved_widths(self):
+        from amazing_overlay.ui import ManagerWindow
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+        window = ManagerWindow()
+        window.show()
+        try:
+            self.events_until(lambda: window.header_ready)
+            header = window.sources.horizontalHeader()
+            # Reset prior test preferences; the last divider must resize Status
+            # without stealing width from Updated or the URL column.
+            for i, width in enumerate((64, 260, 220, 150, 130)):
+                header.resizeSection(i, width)
+            old = [header.sectionSize(i) for i in range(5)]
+            pos = QPoint(header.sectionViewportPosition(4) + old[4] - 1, header.height() // 2)
+            QTest.mousePress(header.viewport(), Qt.LeftButton, Qt.NoModifier, pos)
+            QTest.mouseMove(header.viewport(), pos + QPoint(48, 0), 50)
+            QTest.mouseRelease(header.viewport(), Qt.LeftButton, Qt.NoModifier, pos + QPoint(48, 0))
+            self.assertGreater(header.sectionSize(4), old[4])
+            self.assertEqual([header.sectionSize(i) for i in range(4)], old[:4])
+            resized = header.sectionSize(4)
+            for width in (1040, 1500, 1200):
+                window.resize(width, 700)
+                self.app.processEvents()
+                self.assertEqual(header.sectionSize(4), resized)
+            window.sources.selectRow(0)
+            ident = window.selected_ids()[0]
+            window.show_sources(window.source_values)
+            self.assertIn(ident, window.selected_ids())
+            window.source_filter.setText("no-such-title-test")
+            self.assertFalse(window.selected_ids())
+            self.assertTrue(all(window.sources.isRowHidden(i) for i in range(window.sources.rowCount())))
+            window.source_filter.clear()
+            self.assertFalse(window.sources.isRowHidden(0))
+            window.save_header()
+            self.events_until(lambda: not window.work)
+        finally:
+            window.close()
+            self.events_until(lambda: not window.work)
+        restored = ManagerWindow()
+        restored.show()
+        try:
+            self.events_until(lambda: restored.header_ready)
+            self.assertEqual(restored.sources.horizontalHeader().sectionSize(4), resized)
+            for i in range(5):
+                restored.tabs.setCurrentIndex(i)
+                self.app.processEvents()
+                self.assertTrue(restored.nav_buttons[i].isChecked())
+                restored.grab().save(str(ROOT / f'.cache/desktop-manager-{i}.png'))
+        finally:
+            restored.close()
+            self.events_until(lambda: not restored.work)
+
+    def test_backend_graceful_stop_and_restart(self):
+        from amazing_overlay import transport
+        import uuid
+        pipe = 'amazing-desktop-stop-' + uuid.uuid4().hex
+        with tempfile.TemporaryDirectory(prefix='Amazing тест ') as directory:
+            env = dict(os.environ, AMAZING_OVERLAY_PIPE=pipe, AMAZING_OVERLAY_DATA=directory)
+            process = subprocess.Popen([sys.executable, '-m', 'amazing_overlay', 'backend'], cwd=directory, env=dict(env, PYTHONPATH=str(ROOT)),
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            with patch.object(transport, 'PIPE_NAME', pipe):
+                try:
+                    self.events_until(lambda: self.backend_reachable(transport), timeout=20)
+                    transport.rpc('settings_save', {'notes_dir': str(Path(directory) / 'Notes')})
+                    transport.rpc('notes_create', {'path': 'Запись.txt', 'text': 'Сохранено перед остановкой'})
+                    self.assertFalse(transport.stop_backend(timeout=15))
+                    process.wait(timeout=10)
+                    self.assertEqual(process.returncode, 0)
+                    process.communicate(timeout=5)
+                    self.assertEqual((Path(directory) / 'Notes/Запись.txt').read_text(encoding='utf-8'), 'Сохранено перед остановкой')
+                    process = subprocess.Popen([sys.executable, '-m', 'amazing_overlay', 'backend'], cwd=directory,
+                                               env=dict(env, PYTHONPATH=str(ROOT)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    self.events_until(lambda: self.backend_reachable(transport), timeout=20)
+                    self.assertEqual(transport.rpc('notes_read', {'path': 'Запись.txt'})['text'], 'Сохранено перед остановкой')
+                    transport.stop_backend(timeout=15)
+                    process.wait(timeout=10)
+                    self.assertEqual(process.returncode, 0)
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.communicate(timeout=10)
+
+    @staticmethod
+    def backend_reachable(transport):
+        try:
+            return bool(transport.rpc('health', timeout=1000))
+        except (ConnectionError, TimeoutError):
+            return False
 
     def test_overlay_preserves_document_and_search_stays_responsive(self):
         from amazing_overlay.ui import OverlayWindow
