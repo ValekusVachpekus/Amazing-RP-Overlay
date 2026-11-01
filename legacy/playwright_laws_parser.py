@@ -11,7 +11,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 
-BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+BASE_DIR = Path(__file__).resolve().parent.parent / "local"
 OUTPUT_DIR = BASE_DIR / "laws"
 URLS_FILE = BASE_DIR / "urls.txt"
 

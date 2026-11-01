@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle-path", type=Path, default=ROOT / "dist" / "AmazingLawOverlay")
+    parser.add_argument("--bundle-path", type=Path, default=ROOT / ".cache/dist" / "AmazingLawOverlay")
     args = parser.parse_args()
     OUTPUT = args.bundle_path.resolve() / "licenses"
     OUTPUT.mkdir(parents=True, exist_ok=True)

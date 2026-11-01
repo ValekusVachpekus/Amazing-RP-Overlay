@@ -116,7 +116,7 @@ def publish(bundle):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, default=ROOT / "dist" / "portable-build" / "AmazingLawOverlay")
+    parser.add_argument("--bundle", type=Path, default=ROOT / ".cache/dist" / "portable-build" / "AmazingLawOverlay")
     parser.add_argument("--check", action="store_true", help="Only verify the tracked release")
     args = parser.parse_args()
     if args.check:

@@ -15,7 +15,7 @@ if ($NativeDirectory) {
 }
 if (-not $sourceLibrary) { throw 'Build AmazingLawClient.dll first.' }
 
-$distDirectory = Join-Path $projectRoot 'dist'
+$distDirectory = Join-Path $projectRoot '.cache/dist'
 $latestDirectory = Join-Path $distDirectory 'native-latest'
 New-Item -ItemType Directory -Force -Path $latestDirectory | Out-Null
 $destinations = @(

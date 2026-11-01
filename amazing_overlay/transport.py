@@ -18,7 +18,7 @@ def rpc(method, params=None, timeout=15000):
     socket = QLocalSocket()
     socket.connectToServer(PIPE_NAME)
     if not socket.waitForConnected(1500):
-        raise ConnectionError("Бэкенд не запущен. Запустите run_backend.bat или окно управления.")
+        raise ConnectionError("Бэкенд не запущен. Запустите scripts/run/run_backend.bat или окно управления.")
     ident = uuid.uuid4().hex
     payload = json.dumps({"v": 1, "id": ident, "method": method, "params": params or {}}, ensure_ascii=False).encode() + b"\n"
     if len(payload) > MAX_FRAME:

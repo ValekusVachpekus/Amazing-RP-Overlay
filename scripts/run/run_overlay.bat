@@ -1,6 +1,6 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0..\.."
 
 title Law Overlay
 
@@ -11,7 +11,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo Installing/updating PySide6...
-.venv\Scripts\python.exe -m pip install -r requirements_backend.txt
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 if errorlevel 1 goto :error
 
 echo.

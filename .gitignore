@@ -39,3 +39,7 @@ native/out-local/
 /debugAI.py
 /requirements_overlay.txt
 /requirements_playwright.txt
+/Notes/
+/local/
+/Release/Notes/
+/Release/local/

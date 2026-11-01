@@ -12,7 +12,7 @@ from .transport import ensure_backend, rpc
 
 def main():
     parser = argparse.ArgumentParser(description="Amazing laws parser / shared backend")
-    parser.add_argument("--urls", type=Path, default=ROOT / "urls.txt")
+    parser.add_argument("--urls", type=Path, default=ROOT / "local" / "urls.txt" if (ROOT / "local" / "urls.txt").exists() else ROOT / "urls.txt")
     parser.add_argument("--visible", action="store_true", help="Show browser for manual challenge checks")
     parser.add_argument("--export", type=Path, help="Export successful database documents to TXT/JSON/CSV")
     args = parser.parse_args()

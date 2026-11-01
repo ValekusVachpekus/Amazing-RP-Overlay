@@ -22,11 +22,11 @@
 | `Release/` | Готовый переносимый комплект для пользователей |
 
 Для разработки нужен Windows x64 и Python 3.10+.
-`run_manager.bat` создаёт `.venv`, устанавливает зависимости и запускает управление.
-Другие точки входа: `run_backend.bat`, `run_overlay.bat`, `run_parser.bat`.
-Общие зависимости — `requirements_backend.txt`; `requirements.txt` ссылается на него.
+`scripts/run/run_manager.bat` создаёт `.venv`, устанавливает зависимости и запускает управление.
+Другие точки входа: `scripts/run/run_backend.bat`, `scripts/run/run_overlay.bat`, `scripts/run/run_parser.bat`.
+Общие зависимости — `requirements.txt`; `requirements.txt` ссылается на него.
 
-`build_native.bat` собирает DLL/ASI. `build_portable.bat` собирает оба клиента,
+`scripts/build/build_native.bat` собирает DLL/ASI. `scripts/build/build_portable.bat` собирает оба клиента,
 проверяет запуск и обновляет `Release/` с контрольными суммами.
 
 ## Данные

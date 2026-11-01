@@ -12,7 +12,7 @@ from amazing_overlay.store import Store
 
 
 def main():
-    base_bytes = sum(path.stat().st_size for path in (ROOT / "laws").glob("*.txt"))
+    base_bytes = sum(path.stat().st_size for path in (ROOT / "local" / "laws").glob("*.txt"))
     target_bytes = max(12_500_000, base_bytes * 10)
     text = "Статья 1. Порядок задержания\n" + "Сотрудник полиции соблюдает порядок задержания гражданина и основания досмотра. " * 1500
     documents = max(100, target_bytes // len(text.encode("utf-8")) + 1)

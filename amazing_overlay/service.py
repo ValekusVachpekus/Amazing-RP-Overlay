@@ -24,8 +24,8 @@ class Backend:
         self.browser_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="backend-job")
         self.jobs = {}
-        self.import_warnings = self.store.import_legacy(root / "laws")
-        urls = root / "urls.txt"
+        self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws")
+        urls = root / "local" / "urls.txt" if (root / "local" / "urls.txt").exists() else root / "urls.txt"
         if not self.store.get_preference("sources_initialized", False):
             if urls.exists():
                 for line in urls.read_text(encoding="utf-8-sig").splitlines():

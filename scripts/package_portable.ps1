@@ -1,4 +1,4 @@
-param([string]$BundlePath = 'dist/AmazingLawOverlay')
+param([string]$BundlePath = '.cache/dist/AmazingLawOverlay')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $bundleDirectory = Join-Path $projectRoot $BundlePath
@@ -12,7 +12,7 @@ foreach ($clientMode in @('manager', 'overlay', 'backend', 'install-browser')) {
     [System.IO.File]::WriteAllText((Join-Path $bundleDirectory "start_$clientMode.bat"), $batchText)
 }
 $nativeCandidates = @(
-    (Join-Path $projectRoot 'dist/native-latest/AmazingLawClient.dll'),
+    (Join-Path $projectRoot '.cache/dist/native-latest/AmazingLawClient.dll'),
     (Join-Path $projectRoot 'native/out/Release/AmazingLawClient.dll'),
     (Join-Path $projectRoot 'native/out-local/AmazingLawClient.dll')
 ) | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-Item -LiteralPath $_ }

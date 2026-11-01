@@ -56,7 +56,7 @@ Python, Qt и инструменты сборки устанавливать н�
 
 `manifest.json` содержит SHA256 и размер каждого файла. Его проверяет команда
 из исходного проекта: `.venv\Scripts\python.exe scripts\publish_release.py --check`.
-Сборка и обновление этой папки: `build_portable.bat` в корне проекта.
+Сборка и обновление этой папки: `scripts/build/build_portable.bat` в корне проекта.
 Исходники находятся рядом с `Release`, повторно копировать их внутрь не требуется.
 
 Подробности: [руководство v2](docs/V2.md), [локальный API](docs/PROTOCOL.md).

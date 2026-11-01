@@ -32,10 +32,10 @@ def atomic_json(path: Path, value):
 
 def load_settings(private=False) -> dict:
     value = dict(DEFAULTS)
-    for path in (ROOT / "config.json", DATA / "settings.json"):
+    for path in (ROOT / "config.json", ROOT / "local" / "config.json", DATA / "settings.json"):
         if path.exists():
             loaded = json.loads(path.read_text(encoding="utf-8"))
-            if path == ROOT / "config.json":
+            if path.name == "config.json":
                 for old, new in (("toggle", "toggle_hotkey"), ("search", "input_hotkey"), ("prev_law", "prev_law_hotkey"),
                                  ("next_law", "next_law_hotkey"), ("scroll_up", "scroll_up_hotkey"), ("scroll_down", "scroll_down_hotkey")):
                     hotkey = loaded.get("hotkeys", {}).get(old)

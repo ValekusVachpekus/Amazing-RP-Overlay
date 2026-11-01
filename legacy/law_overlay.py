@@ -44,11 +44,12 @@ from PySide6.QtWidgets import (
     QSizeGrip,
 )
 
-BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+BASE_DIR = Path(__file__).resolve().parent.parent / "local"
 LAWS_DIR = BASE_DIR / "laws"
 INDEX_FILE = LAWS_DIR / "index.csv"
 CONFIG_FILE = BASE_DIR / "config.json"
-ENV_FILE = BASE_DIR / ".env"
+ENV_FILE = BASE_DIR.parent / ".env"
 
 DEFAULT_CONFIG = {
     "hotkeys": {

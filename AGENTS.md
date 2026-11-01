@@ -11,7 +11,7 @@
 Рабочие данные находятся в `%LOCALAPPDATA%\AmazingLawOverlay\v2`.
 Корневые `laws/`, `config.json`, `urls.txt` — локальные данные для совместимости,
 они игнорируются Git. Публичный пример источников: `examples/urls.txt`.
-Все исходные клиенты устанавливают `requirements_backend.txt`;
+Все исходные клиенты устанавливают `requirements.txt`;
 `requirements.txt` — совместимая ссылка на этот список.
 Диагностика API доступна в менеджере и в настройках ASI.
 
@@ -43,8 +43,8 @@
 - `config.json` — хоткеи, размер окна, AI provider/base_url/model. Без секретов.
 - `.env` / `.env.example` — секреты: `AI_API_KEY`, дубли `AI_PROVIDER/BASE_URL/MODEL`.
 - `laws/<thread_id>__<title>.txt` — тексты законов, `laws/index.csv` — индекс.
-- `run_overlay.bat` / `run_parser.bat` — создание `.venv` + установка + запуск.
-- `requirements_backend.txt` — общие зависимости; прежние отдельные списки удалены.
+- `scripts/run/run_overlay.bat` / `scripts/run/run_parser.bat` — создание `.venv` + установка + запуск.
+- `requirements.txt` — общие зависимости; прежние отдельные списки удалены.
 - `.browser-profile/` — persistent Chromium profile (куки JS-защиты), не коммитить.
 - `debug/` — скриншоты/HTML при непроходе JS-защиты, не коммитить.
 
@@ -106,8 +106,8 @@
 
 ## Запуск
 Windows (прод):
-- `run_overlay.bat` — venv + `requirements_backend.txt` + внешний клиент v2.
-- `run_parser.bat` — venv + `requirements_backend.txt` + Chromium + CLI парсера v2.
+- `scripts/run/run_overlay.bat` — venv + `requirements.txt` + внешний клиент v2.
+- `scripts/run/run_parser.bat` — venv + `requirements.txt` + Chromium + CLI парсера v2.
 Linux (только тест окна):
 - `.venv/bin/python test_overlay_linux.py` — ручной тест.
 - `QT_QPA_PLATFORM=offscreen .venv/bin/python test_overlay_linux.py --smoke` — headless.
