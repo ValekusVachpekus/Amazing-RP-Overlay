@@ -17,7 +17,7 @@ from .documents import chunks
 from .settings import ROOT, DEFAULTS
 from .browsers import configure_browser_environment
 from .transport import background, ensure_backend, rpc
-from .win32 import Hotkeys, activate, belongs_to_game, foreground, native_owns_input, parse_hotkey, set_input
+from .win32 import Hotkeys, activate, belongs_to_game, foreground, native_owns_input, open_native_notebook, parse_hotkey, set_input
 
 STYLE = """
 QWidget {background:#111827;color:#e2e8f0;font-family:'Segoe UI';font-size:14px;}
@@ -689,6 +689,7 @@ class OverlayWindow(RemoteWindow):
         self.reader.setFont(font)
         if self.notebook:
             self.notebook.set_text_size(settings["font_size"])
+        self.update_mode_hint()
 
     def refresh_settings(self):
         if self.restoring or self.closed or self.settings_poll_pending:
@@ -829,7 +830,14 @@ class OverlayWindow(RemoteWindow):
         interactive = mode == "input"
         set_input(int(self.winId()), interactive)
         self.drag_offset = None
-        self.status.setText("Ввод • Alt+F или Esc → просмотр" if interactive else "Просмотр • Alt+F → ввод • Ctrl+L → скрыть")
+        self.update_mode_hint()
+
+    def update_mode_hint(self):
+        settings = getattr(self, "appearance_settings", DEFAULTS)
+        input_key = settings.get("input_hotkey", DEFAULTS["input_hotkey"])
+        toggle_key = settings.get("toggle_hotkey", DEFAULTS["toggle_hotkey"])
+        self.status.setText(f"Ввод • {input_key} / Esc → просмотр" if self.mode == "input" else
+                            f"Просмотр • {input_key} → ввод • {toggle_key} → скрыть")
 
     def enter_input(self):
         current = foreground()
@@ -897,6 +905,8 @@ class OverlayWindow(RemoteWindow):
             self.hotkeys.set_active(False)
             if self.isVisible():
                 self.hide_overlay()
+            if action == "notes":
+                open_native_notebook(self.game_hwnd if current == int(self.winId()) else current)
             return
         if current != int(self.winId()) and not belongs_to_game(current):
             return

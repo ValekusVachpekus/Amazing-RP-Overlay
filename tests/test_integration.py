@@ -150,9 +150,14 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("First EndScene callback received", log)
         self.assertIn("Renderer initialized", log)
         capture = ROOT / ".cache/notebook-native-preview.bmp"
-        result = subprocess.run([str(binary), "--self-test", "--notebook", "--tabs"], cwd=binary.parent, timeout=20,
-                                env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name, AMAZING_OVERLAY_CAPTURE=str(capture)),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        settings = rpc('settings')
+        rpc('settings_save', {'input_hotkey': 'F9', 'toggle_hotkey': 'F11'})
+        try:
+            result = subprocess.run([str(binary), "--self-test", "--notebook", "--tabs"], cwd=binary.parent, timeout=20,
+                                    env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name, AMAZING_OVERLAY_CAPTURE=str(capture)),
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        finally:
+            rpc('settings_save', {key: settings[key] for key in ('input_hotkey', 'toggle_hotkey')})
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         self.assertTrue(capture.exists())
 
@@ -226,6 +231,14 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(window.notebook.editor.font().pixelSize(), 26)
                 self.assertEqual(window.notebook.editor.document().defaultFont().pixelSize(), 26)
                 self.assertEqual(window.reader.font().pixelSize(), 26)
+                settings.update(input_hotkey='F9', toggle_hotkey='F11')
+                window.apply_appearance(settings)
+                window.set_mode('view')
+                self.assertIn('F9', window.status.text())
+                self.assertIn('F11', window.status.text())
+                self.assertNotIn('Alt+F', window.status.text())
+                window.set_mode('input')
+                self.assertIn('F9 / Esc', window.status.text())
                 rpc('settings_save', {'font_size': 14})
                 window.refresh_settings()
                 self.events_until(lambda: window.notebook.editor.font().pixelSize() == 14)
@@ -233,9 +246,10 @@ class IntegrationTest(unittest.TestCase):
                     window.hotkeys.reset_mock()
                     window.update_hotkey_scope()
                     self.assertFalse(window.hotkeys.set_active.call_args.args[0])
-                    with patch.object(window, 'toggle_notebook') as opened:
+                    with patch.object(window, 'toggle_notebook') as opened, patch('amazing_overlay.ui.open_native_notebook') as forwarded:
                         window.hotkey('notes')
                         opened.assert_not_called()
+                        forwarded.assert_called_once_with(1234)
                 with patch('amazing_overlay.ui.foreground', return_value=1234), patch('amazing_overlay.ui.belongs_to_game', return_value=True), patch('amazing_overlay.ui.native_owns_input', return_value=False):
                     window.update_hotkey_scope()
                     self.assertTrue(window.hotkeys.set_active.call_args.args[0])
@@ -254,10 +268,21 @@ class IntegrationTest(unittest.TestCase):
                     win32.user32.RemovePropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
                     prop = 'AmazingLawOverlay.NativeInputOwner.v1'
                     self.assertTrue(win32.user32.SetPropW(handle, prop, os.getpid()))
+                    sibling = win32.user32.CreateWindowExW(0, 'STATIC', 'Game sibling test', 0, 0, 0, 1, 1, None, None, None, None)
+                    self.assertTrue(sibling)
+                    command = 'AmazingLawOverlay.NativeNotebookCommand.v1'
                     try:
                         self.assertTrue(win32.native_owns_input(handle))
+                        self.assertEqual(win32.native_owner_window(sibling), handle)
+                        self.assertFalse(win32.open_native_notebook(sibling))
+                        self.assertTrue(win32.user32.SetPropW(handle, command, 1))
+                        with patch.object(win32.user32, 'PostMessageW', return_value=1) as sent:
+                            self.assertTrue(win32.open_native_notebook(sibling))
+                            sent.assert_called_once_with(handle, 0x8416, 1, 0)
                     finally:
+                        win32.user32.RemovePropW(handle, command)
                         win32.user32.RemovePropW(handle, prop)
+                        win32.user32.DestroyWindow(sibling)
                     self.assertFalse(win32.native_owns_input(handle))
                     win32.user32.DestroyWindow(handle)
             finally:

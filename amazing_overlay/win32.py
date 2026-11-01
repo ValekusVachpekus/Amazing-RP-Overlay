@@ -44,6 +44,8 @@ if sys.platform == "win32":
     user32.GetPropW.restype = wintypes.HANDLE
     user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
     user32.GetAncestor.restype = wintypes.HWND
+    user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
     user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
 
@@ -52,20 +54,39 @@ def foreground():
     return int(user32.GetForegroundWindow() or 0) if sys.platform == "win32" else 0
 
 
-def native_owns_input(hwnd):
-    """The injected client marks its own HWND; the property dies with that window."""
+def native_owner_window(hwnd):
+    """Find the marked render window, including sibling windows of the same game."""
     if sys.platform != "win32" or not hwnd:
-        return False
+        return 0
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return 0
+    def owned(window):
+        window_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(window, ctypes.byref(window_pid))
+        return window_pid.value == pid.value and user32.GetPropW(window, "AmazingLawOverlay.NativeInputOwner.v1") == pid.value
     for window in {hwnd, user32.GetAncestor(hwnd, 2), user32.GetAncestor(hwnd, 3)}:
-        if not window:
-            continue
-        owner = user32.GetPropW(window, "AmazingLawOverlay.NativeInputOwner.v1")
-        if owner:
-            pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(window, ctypes.byref(pid))
-            if int(owner) == pid.value:
-                return True
-    return False
+        if window and owned(window):
+            return int(window)
+    # Some game dialogs are separate top-level windows, rather than children or
+    # owned popups. Native ownership belongs to the process, not just one HWND.
+    found = []
+    callback = user32.EnumWindows.argtypes[0](lambda window, _: (found.append(int(window)) or False) if owned(window) else True)
+    user32.EnumWindows(callback, 0)
+    return found[0] if found else 0
+
+
+def native_owns_input(hwnd):
+    return bool(native_owner_window(hwnd))
+
+
+def open_native_notebook(hwnd):
+    """Forward an already queued Ctrl+N, without activating an external window."""
+    window = native_owner_window(hwnd)
+    if not window or not user32.GetPropW(window, "AmazingLawOverlay.NativeNotebookCommand.v1"):
+        return False
+    return bool(user32.PostMessageW(window, 0x8000 + 0x416, 1, 0))
 
 
 def belongs_to_game(hwnd):

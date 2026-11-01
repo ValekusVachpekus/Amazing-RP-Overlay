@@ -89,7 +89,7 @@ SettingsPanel::Action SettingsPanel::Draw(bool busy, bool testing, const std::st
     ImGui::Spacing();ImGui::Separator();ImGui::TextUnformatted("БЛОКНОТ");
     ImGui::TextWrapped("Папка заметок: полный путь. Пусто — Notes рядом с проектом / программой. Файлы автоматически не переносятся.");
     ImGui::SetNextItemWidth(-1);ImGui::InputText("##notes-dir",notesDirectory.data(),notesDirectory.size());
-    ImGui::TextUnformatted("Открыть блокнот / новая заметка (после изменения перезапустите клиент):");
+    ImGui::TextUnformatted("Открыть блокнот / новая заметка:");
     ImGui::SetNextItemWidth(-1);ImGui::InputText("##notes-hotkey",notesHotkey.data(),notesHotkey.size());
     ImGui::Spacing(); ImGui::Separator(); ImGui::TextUnformatted("ИИ / API");
     ImGui::SetNextItemWidth(-1);

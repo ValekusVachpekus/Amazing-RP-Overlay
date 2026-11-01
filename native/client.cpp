@@ -64,6 +64,8 @@ bool initialized = false;
 SettingsPanel settingsPanel;
 TabNavigation navigation;
 constexpr wchar_t NativeInputOwner[]=L"AmazingLawOverlay.NativeInputOwner.v1";
+constexpr UINT OpenNotebookMessage=WM_APP+0x416;
+std::atomic<bool> openNotebookRequested{false};
 notebook::NotebookPanel& Notebook() { static auto* value=new notebook::NotebookPanel();return *value; }
 std::atomic<bool> flushNotebook{false};
 std::array<ImFont*, 13> uiFonts{};
@@ -275,6 +277,12 @@ void Refresh() {
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == OpenNotebookMessage && wParam == 1 && lParam == 0) {
+        // A queued external hotkey can arrive just as native ownership changes.
+        // Only request the tab here; all ImGui work stays in the render thread.
+        openNotebookRequested = true;
+        return 0;
+    }
     if ((msg == WM_ACTIVATEAPP && !wParam) || (msg == WM_SIZE && wParam == SIZE_MINIMIZED))
         SetMode(Mode::Hidden, false);
     if (initialized && mode == Mode::Input) {
@@ -353,6 +361,16 @@ void Draw() {
         scrollUp = state.scrollUp; scrollDown = state.scrollDown;
         if (settingsRevision != state.settingsRevision) {
             settingsPanel.Receive(state.settings, state.settingsSaved); state.settingsSaved = false; settingsRevision = state.settingsRevision;
+            state.toggle = ParseBinding(state.settings.value("toggle_hotkey", "Ctrl+L"), state.toggle);
+            state.input = ParseBinding(state.settings.value("input_hotkey", "Alt+F"), state.input);
+            state.notes = ParseBinding(state.settings.value("notes_hotkey", "Ctrl+N"), state.notes);
+            state.previousLaw = ParseBinding(state.settings.value("prev_law_hotkey", "Alt+Left"), state.previousLaw);
+            state.nextLaw = ParseBinding(state.settings.value("next_law_hotkey", "Alt+Right"), state.nextLaw);
+            state.scrollUp = ParseBinding(state.settings.value("scroll_up_hotkey", "Alt+Up"), state.scrollUp);
+            state.scrollDown = ParseBinding(state.settings.value("scroll_down_hotkey", "Alt+Down"), state.scrollDown);
+            toggle=state.toggle; input=state.input; notes=state.notes;
+            previousLaw=state.previousLaw; nextLaw=state.nextLaw;
+            scrollUp=state.scrollUp; scrollDown=state.scrollDown;
         }
         settingsPending = state.settingsPending; testing = !state.testJob.empty(); settingsMessage = state.settingsMessage;
         if (!settingsPending) settingsPanel.awaitingSave = false;
@@ -366,6 +384,10 @@ void Draw() {
         }
     }
     bool focused = GetForegroundWindow() == gameWindow;
+    if(openNotebookRequested.exchange(false)) {
+        SelectTab(MainTab::Notebook);
+        SetMode(Mode::Input);
+    }
     static bool previousNotes=false;
     bool n=focused && Pressed(notes);
     if(n && !previousNotes) {
@@ -418,7 +440,10 @@ void Draw() {
     ImGui::SetNextWindowSize(ImVec2(1100, 720), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(60, 80), ImGuiCond_FirstUseEver);
     ImGuiWindowFlags flags = mode == Mode::Input ? 0 : ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove;
-    ImGui::Begin("AMAZING / ЗАКОНЫ • Автор: Vladislav_Shetkov###amazing-main", nullptr, flags);
+    bool panelOpen=true;
+    const bool expanded=ImGui::Begin("AMAZING • Автор: Vladislav_Shetkov###amazing-main", &panelOpen, flags | ImGuiWindowFlags_NoCollapse);
+    if(!panelOpen)SetMode(Mode::Hidden);
+    if(!expanded){ImGui::End();return;}
     const auto position = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
     const ImVec2 bounded(std::clamp(position.x, 0.f, std::max(0.f, screen.x - size.x)), std::clamp(position.y, 0.f, std::max(0.f, screen.y - size.y)));
     if (bounded.x != position.x || bounded.y != position.y) ImGui::SetWindowPos(bounded);
@@ -446,29 +471,15 @@ void Draw() {
         ImGui::EndTabBar();
     }
     navigation.requestSelection=false;
-    if (ImGui::Button(showList ? "Список: открыт" : "Список", ImVec2(160 * scale, 36 * scale))) { SelectTab(MainTab::Laws);showList = !showList; savePanels(); }
-    headerLine(145); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145 * scale, 36 * scale))) { SelectTab(MainTab::Laws);showChat = !showChat; savePanels(); }
-    headerLine(110); if (ImGui::Button("Обновить", ImVec2(110 * scale, 36 * scale))) Refresh();
-    headerLine(95); if (ImGui::Button("Скрыть", ImVec2(95 * scale, 36 * scale))) SetMode(Mode::Hidden);
-    headerLine(36);
-    const auto gearPosition = ImGui::GetCursorScreenPos();
-    if (ImGui::InvisibleButton("settings-gear", ImVec2(36 * scale, 36 * scale)) && !settingsPending && !testing) {
-        SelectTab(MainTab::Settings); SetMode(Mode::Input);
-        Enqueue([] { auto value = Rpc("settings"); std::lock_guard<std::mutex> lock(S().mutex); S().settings = value; ++S().settingsRevision; });
+    if(navigation.active==MainTab::Laws) {
+        if (ImGui::Button(showList ? "Список: открыт" : "Список", ImVec2(160 * scale, 36 * scale))) { showList = !showList; savePanels(); }
+        headerLine(145); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145 * scale, 36 * scale))) { showChat = !showChat; savePanels(); }
+        headerLine(110); if (ImGui::Button("Обновить", ImVec2(110 * scale, 36 * scale))) Refresh();
     }
-    auto* gearDraw = ImGui::GetWindowDrawList();
-    gearDraw->AddRectFilled(gearPosition, ImVec2(gearPosition.x + 36 * scale, gearPosition.y + 36 * scale), ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered : ImGuiCol_Button), 6 * scale);
-    ImVec2 center(gearPosition.x + 18 * scale, gearPosition.y + 18 * scale);
-    auto gearColor = ImGui::GetColorU32(ImGuiCol_Text);
-    gearDraw->AddCircle(center, 7 * scale, gearColor, 24, 2 * scale);
-    gearDraw->AddCircle(center, 2 * scale, gearColor, 16, 1.5f * scale);
-    for (int tooth = 0; tooth < 8; ++tooth) {
-        const float angle = tooth * 3.14159265f / 4;
-        gearDraw->AddLine(ImVec2(center.x + std::cos(angle) * 7 * scale, center.y + std::sin(angle) * 7 * scale),
-                          ImVec2(center.x + std::cos(angle) * 11 * scale, center.y + std::sin(angle) * 11 * scale), gearColor, 3 * scale);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Настройки");
-    ImGui::TextDisabled("%s", mode == Mode::Input ? "Ввод / Esc: просмотр" : "Просмотр / Alt+F: ввод");
+    const auto inputLabel=overlay_input::BindingLabel(input);
+    const auto toggleLabel=overlay_input::BindingLabel(toggle);
+    if(mode==Mode::Input)ImGui::TextDisabled("Ввод • %s / Esc — просмотр",inputLabel.c_str());
+    else ImGui::TextDisabled("Просмотр • %s — ввод • %s — скрыть",inputLabel.c_str(),toggleLabel.c_str());
     if (navigation.active==MainTab::Settings) {
         const auto action = settingsPanel.Draw(settingsPending, testing, settingsMessage);
         if (action == SettingsPanel::Action::Save || action == SettingsPanel::Action::Test) {
@@ -680,6 +691,7 @@ HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
         }
         initialized = true;
         if(!SetPropW(gameWindow,NativeInputOwner,reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(GetCurrentProcessId()))))Log("WARNING: could not publish native hotkey ownership");
+        SetPropW(gameWindow,L"AmazingLawOverlay.NativeNotebookCommand.v1",reinterpret_cast<HANDLE>(1));
         Log("Renderer initialized; Ctrl+L shows panel; Alt+F enables input");
     }
     if (device == activeDevice) {

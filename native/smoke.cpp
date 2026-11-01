@@ -5,7 +5,7 @@
 #include <vector>
 #include <cmath>
 
-void Capture(IDirect3DDevice9* device) {
+void Capture(IDirect3DDevice9* device, const wchar_t* suffix=L"") {
     wchar_t path[32768]{};
     if (!GetEnvironmentVariableW(L"AMAZING_OVERLAY_CAPTURE", path, 32768)) return;
     IDirect3DSurface9 *back = nullptr, *copy = nullptr;
@@ -20,7 +20,9 @@ void Capture(IDirect3DDevice9* device) {
             file.bfSize = file.bfOffBits + desc.Width * desc.Height * 4;
             info.biSize = sizeof(info); info.biWidth = desc.Width; info.biHeight = -static_cast<LONG>(desc.Height);
             info.biPlanes = 1; info.biBitCount = 32; info.biCompression = BI_RGB;
-            std::ofstream output(path, std::ios::binary);
+            std::wstring outputPath(path);
+            if(*suffix)outputPath.insert(outputPath.find_last_of(L'.'),suffix);
+            std::ofstream output(outputPath, std::ios::binary);
             output.write(reinterpret_cast<char*>(&file), sizeof(file)); output.write(reinterpret_cast<char*>(&info), sizeof(info));
             for (UINT row = 0; row < desc.Height; ++row)
                 output.write(static_cast<char*>(pixels.pBits) + row * pixels.Pitch, desc.Width * 4);
@@ -90,10 +92,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
                 if(tabFrames==61){settingsPreview(26,0);selectTab(1);}
                 if(tabFrames==90 && (activeTab()!=1 || fabsf(noteFont()-26)>0.1f))return 12;
                 if(tabFrames==91)selectTab(0);
-                if(tabFrames==92 && activeTab()!=0)return 13;
-                if(tabFrames==93)selectTab(2);
-                if(tabFrames==94 && activeTab()!=2)return 14;
-                if(tabFrames==95)selectTab(1);
+                if(tabFrames==94){if(activeTab()!=0)return 13;Capture(device,L"-laws");}
+                if(tabFrames==95)selectTab(2);
+                if(tabFrames==98){if(activeTab()!=2)return 14;Capture(device,L"-settings");}
+                if(tabFrames==99)selectTab(1);
+                if(tabFrames==102){
+                    selectTab(0);
+                    // The external client forwards only an open request; render
+                    // code selects the native tab without spawning any window.
+                    SendMessageW(window,WM_APP+0x416,1,0);
+                }
+                if(tabFrames==105 && activeTab()!=1)return 16;
                 if(reinterpret_cast<ULONG_PTR>(GetPropW(window,L"AmazingLawOverlay.NativeInputOwner.v1"))!=GetCurrentProcessId())return 15;
             }
             if(!previewedNotebook && notebookPreview && probe()==3u && wcsstr(command,L"--notebook")){

@@ -26,6 +26,25 @@ inline Binding ParseBinding(std::string value, Binding fallback) {
             value.find("SHIFT+") != std::string::npos, value.find("WIN+") != std::string::npos};
 }
 
+inline std::string BindingLabel(const Binding& binding) {
+    std::string value;
+    if (binding.ctrl) value += "Ctrl+";
+    if (binding.alt) value += "Alt+";
+    if (binding.shift) value += "Shift+";
+    if (binding.win) value += "Win+";
+    switch (binding.key) {
+    case 0x1b: return value + "Esc";
+    case 0x20: return value + "Space";
+    case 0x25: return value + "Left";
+    case 0x26: return value + "Up";
+    case 0x27: return value + "Right";
+    case 0x28: return value + "Down";
+    }
+    if (binding.key >= 0x70 && binding.key <= 0x87)
+        return value + "F" + std::to_string(binding.key - 0x70 + 1);
+    return value + static_cast<char>(binding.key);
+}
+
 inline bool SuppressCursor(bool input, bool foreground) {
     return input && foreground;
 }

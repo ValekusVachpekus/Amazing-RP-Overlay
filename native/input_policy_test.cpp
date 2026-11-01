@@ -23,6 +23,9 @@ int main() {
     auto up = ParseBinding("Alt+Up", left);
     if (left.key != 0x25 || !left.alt || left.ctrl || right.key != 0x27 || up.key != 0x26) return 3;
     if (ParseBinding("Ctrl+F8", left).key != 0x77 || ParseBinding("invalid", left).key != left.key) return 4;
+    if (BindingLabel(ParseBinding("F11", left)) != "F11" || BindingLabel(ParseBinding("Shift+F9", left)) != "Shift+F9") return 15;
+    if (BindingLabel(ParseBinding("Ctrl+N", left)) != "Ctrl+N" || BindingLabel(right) != "Alt+Right") return 16;
+    if (BindingLabel(ParseBinding("Ctrl+Alt+Shift+Win+Space", left)) != "Ctrl+Alt+Shift+Win+Space") return 17;
     // Multiple search hits for one law must not require several presses to reach the next law.
     std::vector<std::string> laws{"a", "a", "b", "c", "b"};
     if (NextDocument(laws, "a", 1) != "b" || NextDocument(laws, "b", -1) != "a") return 5;
