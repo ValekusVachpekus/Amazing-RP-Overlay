@@ -68,3 +68,28 @@ Document tree v1:
 Allowed markup is defined in `documents.py`. Scripts, event attributes and unsafe
 URL schemes are removed. Native rendering consumes the tree, external rendering
 consumes the generated HTML; neither executes forum scripts.
+
+
+## TXT-блокнот (2.2, протокол v1)
+
+`health.notes: true` означает поддержку блокнота. `settings`/`settings_save`
+дополнены `notes_dir` (пусто — стандартная Notes, иначе абсолютный путь) и
+`notes_hotkey` (Ctrl+N). Смена папки не перемещает файлы.
+
+| Метод | Параметры | Результат |
+|---|---|---|
+| `notes_info` | — | `root`, `edit_limit` |
+| `notes_list`, `notes_search` | `query?` | `root`, `entries[{path,folder,bytes?}]` |
+| `notes_read` | `path` | `path,text,revision,encoding,newline,readonly,bytes` |
+| `notes_create` | `path,folder?,text?` | Созданный файл или папка; существующее не заменяется |
+| `notes_save` | `path,text,revision,root?` | `conflict:false` и прочитанная сохранённая версия; либо `conflict:true,current` |
+| `notes_move` | `path,destination,root?` | `path,previous` |
+| `notes_delete` | `path,root?` | `trash_id` |
+| `notes_trash` | — | `[{id,path}]` |
+| `notes_restore` | `id,destination?,root?` | `path` |
+
+Пути относительные, разделитель `/`, только файлы TXT. `root` — полученная от
+сервера папка; клиенты передают её при записи и изменениях, чтобы буфер от прежней
+папки не сохранился в новую. Сервер отклоняет несовпадение. Ревизия — SHA256 байтов
+файла; конфликт не изменяет файл. Ошибки передаются обычным error протокола v1.
+Содержимое заметок не входит в базу законов, diagnostics или автоматический AI-контекст.
