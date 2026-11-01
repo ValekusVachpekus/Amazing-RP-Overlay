@@ -9,7 +9,7 @@ if not exist ".venv\Scripts\python.exe" (
 if errorlevel 1 exit /b 1
 call scripts/build/build_native.bat
 if errorlevel 1 exit /b 1
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name AmazingLawOverlay --specpath .cache/build/spec --distpath .cache/dist/portable-build --workpath .cache/build/portable-build --collect-all playwright --collect-all bs4 --collect-all openai --collect-all dotenv --add-data "amazing_overlay/assets;amazing_overlay/assets" scripts/portable_entry.py
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name AmazingLawOverlay --specpath .cache/build/spec --distpath .cache/dist/portable-build --workpath .cache/build/portable-build --collect-all playwright --collect-all bs4 --collect-all openai --collect-all dotenv --add-data "%CD%/amazing_overlay/assets;amazing_overlay/assets" scripts/portable_entry.py
 if errorlevel 1 exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package_portable.ps1 -BundlePath .cache/dist/portable-build/AmazingLawOverlay
 if errorlevel 1 exit /b 1

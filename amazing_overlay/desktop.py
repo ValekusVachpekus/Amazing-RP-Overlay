@@ -2,6 +2,9 @@
 from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QPalette
+# Load QtSvg's DLL before Qt discovers its image plugin on Windows; otherwise
+# QSS can silently draw empty check marks/arrows in a source or frozen process.
+from PySide6 import QtSvg as _QtSvg
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QVBoxLayout
 
 AUTHOR = "Автор: Vladislav_Shetkov"

@@ -133,6 +133,9 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn('Автор: Vladislav_Shetkov', window.windowTitle())
             self.assertFalse(window.start_button.isEnabled())
             self.assertTrue(window.stop_button.isEnabled())
+            from PySide6.QtGui import QPixmap
+            for asset in ('check.svg', 'up.svg', 'down.svg'):
+                self.assertFalse(QPixmap(str(ROOT / 'amazing_overlay/assets' / asset)).isNull(), asset)
             with patch('amazing_overlay.launcher.open_folder') as opened:
                 window.open_laws()
                 opened.assert_called_once_with(self.temporary.name)
