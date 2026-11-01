@@ -5,7 +5,7 @@ ctypes.windll). Здесь тестируем только OverlayWindow: сох
 закона/скролла между hide/show и drag за шапку + QSizeGrip.
 
 Запуск:
-    pip install -r requirements_overlay.txt
+    pip install -r requirements_backend.txt
     python3 test_overlay_linux.py            # ручной тест с окном
     python3 test_overlay_linux.py --smoke    # headless-проверка (offscreen)
 """

@@ -21,3 +21,21 @@ native/out-local/
 /Release/laws/
 /Release/browser-profile/
 /Release/*.log
+
+# Local data and exports (also used by the legacy entry points).
+/laws/
+/Архив НПА/
+/config.json
+/urls.txt
+/*__*.txt
+/browser-profile/
+/*.log
+/.vscode/
+/*.dll
+/*.asi
+/python-*.exe
+
+# Retired v1 helpers may remain locally after upgrading a checkout.
+/debugAI.py
+/requirements_overlay.txt
+/requirements_playwright.txt

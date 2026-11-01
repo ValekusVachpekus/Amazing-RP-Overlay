@@ -1,2 +1,2 @@
-requests>=2.32,<3
-beautifulsoup4>=4.13,<5
+# Compatibility entry point; all source clients use the shared backend stack.
+-r requirements_backend.txt

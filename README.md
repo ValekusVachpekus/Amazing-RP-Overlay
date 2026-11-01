@@ -1,95 +1,47 @@
 # Amazing Law Overlay 2
 
-Новая версия разделена на бэкенд, окно управления источниками и настройками,
-внешний оверлей и экспериментальный x86 ASI/DLL-клиент.
+Законы Amazing Online поверх игры: структурированный парсер форума, поиск,
+ИИ-помощник и два клиента с общим бэкендом.
 
-- `run_manager.bat` — парсер, источники, ИИ и настройки.
-- `run_overlay.bat` — внешний клиент; сам подключает/запускает бэкенд.
-- `run_backend.bat` — самостоятельный сервис.
-- `build_native.bat` — сборка ASI/DLL для Direct3D 9.
-- `build_portable.bat` — сборка обоих клиентов и переносимого комплекта в `Release/`.
+## Готовая программа
 
-**[Готовый комплект для скачивания и запуска — Release](Release/README.md)**.
-Передавайте всю папку `Release`, включая `_internal`; Python пользователям не нужен.
+[Скачать и запустить комплект Release](Release/README.md).
+Нужна **вся папка `Release`**, включая `_internal`; Python устанавливать не требуется.
+В комплект входят приложение управления, бэкенд, внешний оверлей и x86 DLL/ASI.
 
-**[Запуск, архитектура и ограничения v2](docs/V2.md)** ·
-[Локальный API](docs/PROTOCOL.md) · [Проверка в игре](docs/GAME_ACCEPTANCE.md)
+## Исходники
 
-DLL ещё требует приёмки непосредственно в Amazing: standalone-тест не подтверждает отсутствие АФК.
+| Папка | Назначение |
+| --- | --- |
+| `amazing_overlay/` | Python-бэкенд, парсер, SQLite, ИИ, менеджер и внешний клиент |
+| `native/` | Внутриигровой C++/ImGui-клиент DLL/ASI и нативные тесты |
+| `tests/` | Проверки бэкенда, парсера и интеграции |
+| `scripts/` | Сборка, упаковка, лицензии и проверка Release |
+| `docs/` | Руководство, протокол и проверка в игре |
+| `examples/` | Пример списка источников |
+| `Release/` | Готовый переносимый комплект для пользователей |
 
----
+Для разработки нужен Windows x64 и Python 3.10+.
+`run_manager.bat` создаёт `.venv`, устанавливает зависимости и запускает управление.
+Другие точки входа: `run_backend.bat`, `run_overlay.bat`, `run_parser.bat`.
+Общие зависимости — `requirements_backend.txt`; `requirements.txt` ссылается на него.
 
-Ниже сохранена историческая документация v1; для новых запусков используйте инструкции v2.
+`build_native.bat` собирает DLL/ASI. `build_portable.bat` собирает оба клиента,
+проверяет запуск и обновляет `Release/` с контрольными суммами.
 
-LAW OVERLAY (legacy)
+## Данные
 
-1. Put these files into the SAME folder that contains the parser's `laws` directory:
+Рабочие законы, настройки, ключи и профиль форума хранятся в
+`%LOCALAPPDATA%\AmazingLawOverlay\v2` и не входят в Git.
+Локальные `laws/`, `config.json` и `urls.txt` поддерживаются для совместимости
+и также исключены из Git. [Пример источников](examples/README.md) можно импортировать
+в менеджере. Старые TXT следует скачать заново, чтобы восстановить таблицы.
 
-   law_overlay.py
-   requirements_overlay.txt
-   config.json
-   run_overlay.bat
-   run_overlay_console.bat
+`law_overlay.py` и `playwright_laws_parser.py` сохранены как совместимые точки входа;
+`test_overlay_linux.py` проверяет регрессии прежнего окна.
 
-2. Run `run_overlay.bat`.
+[Запуск и архитектура](docs/V2.md) · [Локальный API](docs/PROTOCOL.md) ·
+[Приёмка в игре](docs/GAME_ACCEPTANCE.md)
 
-The program creates its own `.venv`, installs PySide6, then launches in the background.
-
-Default hotkey:
-    Ctrl + Shift + L
-
-Controls:
-    Ctrl + Shift + L  - show/hide overlay
-    Esc              - hide overlay
-    Alt + F           - enable interaction and focus search
-    Alt + F           - return to click-through mode
-    Double click law - open it in the reader
-    "Open original"  - open the forum thread in the browser
-
-When the overlay is shown, it is click-through by default, so mouse clicks
-reach the application below it. Use the configured search hotkey to interact
-with the overlay. The window is centered again after opening or closing the
-AI assistant panel.
-
-The overlay reads:
-    laws\index.csv
-and:
-    laws\*.txt
-
-The URL for "Open original" comes from `index.csv`.
-
-AI settings are available through the gear button. Select `OpenAI-compatible`,
-choose a model from the list (or type a custom model), and save. API credentials
-are stored in `.env`, not in `config.json`. Copy `.env.example` to `.env` for
-manual setup. The default endpoint is `https://api.openai.com/v1`. NVIDIA and
-other OpenAI-compatible services can be used by changing `Base URL` and model.
-
-To change the hotkey:
-    tray -> Hotkey
-or click `⚙` inside the overlay.
-
-To refresh after the parser creates new laws:
-    tray -> Update laws
-or the `Обновить` button in the overlay.
-
-AI providers:
-    Open the settings and select "OpenAI-compatible / NVIDIA".
-    Enter the API key, Base URL and model. For the NVIDIA example use:
-    Base URL: https://integrate.api.nvidia.com/v1
-    Model:    nvidia/nemotron-3-super-120b-a12b
-
-The OpenAI-compatible provider uses the `openai` Python package and supports
-NVIDIA NIM and other APIs that implement `/chat/completions`.
-
-Recommended folder structure:
-
-    C:\Users\ilusha\Desktop\подсказка\
-        amazing_laws_parser.py
-        law_overlay.py
-        requirements_overlay.txt
-        config.json
-        run_overlay.bat
-        laws\
-            index.csv
-            1043294__...
-            ...
+Standalone-проверки не подтверждают корректность ввода и отсутствие АФК в Amazing;
+это проверяется непосредственно в игре.

@@ -1,5 +1,27 @@
 # AGENTS.md — Amazing RP Overlay
 
+## Текущая версия v2
+
+Основной код находится в `amazing_overlay/` (бэкенд, парсер, менеджер,
+внешний клиент) и `native/` (ASI/DLL). Архитектура и запуск описаны в `docs/V2.md`.
+`Release/` — готовый переносимый комплект; `scripts/publish_release.py --check`
+проверяет его целостность. Нельзя исключать из Git бинарные зависимости Release,
+в том числе `.pyd`, DLL и встроенный Playwright.
+
+Рабочие данные находятся в `%LOCALAPPDATA%\AmazingLawOverlay\v2`.
+Корневые `laws/`, `config.json`, `urls.txt` — локальные данные для совместимости,
+они игнорируются Git. Публичный пример источников: `examples/urls.txt`.
+Все исходные клиенты устанавливают `requirements_backend.txt`;
+`requirements.txt` — совместимая ссылка на этот список.
+Диагностика API доступна в менеджере и в настройках ASI.
+
+Проверки v2: `.venv\Scripts\python.exe -m unittest discover -s tests -v`
+с отдельным `AMAZING_OVERLAY_PIPE` и `QT_QPA_PLATFORM=offscreen`;
+`ctest --test-dir native/out-local --output-on-failure` после локальной нативной сборки.
+
+Ниже описаны сохранённые компоненты **v1**. Старые точки входа при обычном
+запуске перенаправляют в v2; классы прежнего окна остаются для регрессионного smoke.
+
 ## Суть проекта
 Оверлей для игры Amazing Online (RP): быстрый доступ к законам/кодексам
 с форума прямо поверх игры + парсер форума + ИИ-помощник по тексту законов.
@@ -10,7 +32,7 @@
    click-through режим, поиск по базе, ИИ-чат.
 
 Вспомогательное:
-- `debugAI.py` — ручная диагностика Gemini API (ключ/прокси).
+- Диагностика ИИ — в менеджере v2 (устаревший `debugAI.py` удалён из Git).
 - `test_overlay_linux.py` — запуск только `OverlayWindow` на Linux
   (без `main()` и без глобальных хоткеев).
 - `urls.txt` — входной список тем форума для парсера.
@@ -22,8 +44,7 @@
 - `.env` / `.env.example` — секреты: `AI_API_KEY`, дубли `AI_PROVIDER/BASE_URL/MODEL`.
 - `laws/<thread_id>__<title>.txt` — тексты законов, `laws/index.csv` — индекс.
 - `run_overlay.bat` / `run_parser.bat` — создание `.venv` + установка + запуск.
-- `requirements_overlay.txt` (PySide6, openai, dotenv),
-  `requirements_playwright.txt` (playwright), `requirements.txt` (legacy requests/bs4).
+- `requirements_backend.txt` — общие зависимости; прежние отдельные списки удалены.
 - `.browser-profile/` — persistent Chromium profile (куки JS-защиты), не коммитить.
 - `debug/` — скриншоты/HTML при непроходе JS-защиты, не коммитить.
 
@@ -85,8 +106,8 @@
 
 ## Запуск
 Windows (прод):
-- `run_overlay.bat` — venv + `requirements_overlay.txt` + `pythonw law_overlay.py`.
-- `run_parser.bat` — venv + `requirements_playwright.txt` + `playwright install chromium` + парсер.
+- `run_overlay.bat` — venv + `requirements_backend.txt` + внешний клиент v2.
+- `run_parser.bat` — venv + `requirements_backend.txt` + Chromium + CLI парсера v2.
 Linux (только тест окна):
 - `.venv/bin/python test_overlay_linux.py` — ручной тест.
 - `QT_QPA_PLATFORM=offscreen .venv/bin/python test_overlay_linux.py --smoke` — headless.
@@ -98,6 +119,8 @@ Linux (только тест окна):
 - Кодировки: новые `txt` писать в `utf-8`, `index.csv` читать/писать `utf-8-sig`,
   разделитель `;`. Фолбэк чтения `cp1251` уже есть в `read_text_file`.
 - Не коммитить: `.venv/`, `.browser-profile/`, `debug/`, `.env`, `__pycache__/`.
+- Также не коммитить локальные законы, `config.json`, корневой `urls.txt`
+  и установщики Python; готовые бинарные зависимости находятся только в `Release/`.
 - Окно frameless: любые новые кнопки в шапке должны оставаться кликабельными
   (drag игнорирует `QPushButton/QLineEdit/QComboBox`).
 - Не возвращать центрирование при каждом show и сброс списка в `toggle()` —
