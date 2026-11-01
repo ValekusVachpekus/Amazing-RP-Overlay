@@ -1,2 +1,45 @@
 .venv
 .env
+__pycache__/
+*.py[cod]
+.browser-profile/
+debug/
+.cache/
+/build/
+/dist/
+*.spec
+*.db
+*.db-shm
+*.db-wal
+.vs/
+native/out/
+native/out-local/
+# Frozen Python extension modules are runtime dependencies, not bytecode caches.
+!/Release/**/*.pyd
+/Release/config.json
+/Release/urls.txt
+/Release/laws/
+/Release/browser-profile/
+/Release/*.log
+
+# Local data and exports (also used by the legacy entry points).
+/laws/
+/Архив НПА/
+/config.json
+/urls.txt
+/*__*.txt
+/browser-profile/
+/*.log
+/.vscode/
+/*.dll
+/*.asi
+/python-*.exe
+
+# Retired v1 helpers may remain locally after upgrading a checkout.
+/debugAI.py
+/requirements_overlay.txt
+/requirements_playwright.txt
+/Notes/
+/local/
+/Release/Notes/
+/Release/local/

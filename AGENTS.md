@@ -1,106 +1,53 @@
-# AGENTS.md — Amazing RP Overlay
+# AGENTS.md — Amazing RP Overlay 2.2
 
-## Суть проекта
-Оверлей для игры Amazing Online (RP): быстрый доступ к законам/кодексам
-с форума прямо поверх игры + парсер форума + ИИ-помощник по тексту законов.
+Основной Python-код находится в `amazing_overlay/`, C++ ASI/DLL — в `native/`.
+Бэкенд: SQLite/FTS5, Playwright, ИИ и файловая подсистема TXT-блокнота.
+UI: лаунчер, менеджер, внешний оверлей; ASI общается с бэкендом через named pipe.
 
-Два независимых инструмента с общей папкой `laws/`:
-1. `playwright_laws_parser.py` — качает темы форума в `laws/*.txt` + `laws/index.csv`.
-2. `law_overlay.py` — Windows-оверлей на PySide6: always-on-top окно,
-   click-through режим, поиск по базе, ИИ-чат.
+## Структура и данные
 
-Вспомогательное:
-- `debugAI.py` — ручная диагностика Gemini API (ключ/прокси).
-- `test_overlay_linux.py` — запуск только `OverlayWindow` на Linux
-  (без `main()` и без глобальных хоткеев).
-- `urls.txt` — входной список тем форума для парсера.
+- `start.bat` — графический лаунчер. Команды запуска лежат в `scripts/run`,
+  сборки — в `scripts/build`, вспомогательные проверки — в `scripts`.
+- Все Python-зависимости находятся в `requirements.txt`.
+- `legacy/` содержит старые реализации и smoke прежнего окна.
+- `Release/` — готовый комплект. Нельзя исключать из Git необходимые бинарные
+  зависимости, включая `.pyd`, DLL и Playwright. `scripts/publish_release.py --check`
+  проверяет контрольные суммы; публикация сохраняет пользовательские Notes.
+- Рабочие данные: `%LOCALAPPDATA%\AmazingLawOverlay\v2`; настройки, законы,
+  ключи и профиль браузера нельзя коммитить или печатать в журналах.
+- `Notes/` — личные TXT; `local/` — прежние локальные законы/конфиг/архивы.
+  Эти папки исключены из Git, как `.env`, `.venv`, `.cache`, `__pycache__`.
+- В отдельно скачанном комплекте Notes находится рядом с EXE, в исходном
+  проекте — в корне, включая запуск из Release. Путь изменяемый.
 
-## Структура файлов
-- `law_overlay.py` — весь оверлей (~1500 строк, без разбиения на модули).
-- `playwright_laws_parser.py` — парсер XenForo через Playwright Chromium.
-- `config.json` — хоткеи, размер окна, AI provider/base_url/model. Без секретов.
-- `.env` / `.env.example` — секреты: `AI_API_KEY`, дубли `AI_PROVIDER/BASE_URL/MODEL`.
-- `laws/<thread_id>__<title>.txt` — тексты законов, `laws/index.csv` — индекс.
-- `run_overlay.bat` / `run_parser.bat` — создание `.venv` + установка + запуск.
-- `requirements_overlay.txt` (PySide6, openai, dotenv),
-  `requirements_playwright.txt` (playwright), `requirements.txt` (legacy requests/bs4).
-- `.browser-profile/` — persistent Chromium profile (куки JS-защиты), не коммитить.
-- `debug/` — скриншоты/HTML при непроходе JS-защиты, не коммитить.
+## Проверки
 
-## Формат данных laws/
-- Имя: `<thread_id>__<title>.txt`, `thread_id` из URL `threads/...<id>/`.
-- Шапка файла от парсера:
-  ```
-  <title>
-  ===...
-  Источник: <url>
-  Страниц темы: N
-  Сообщений: M
-  [Сообщение i | Автор: x] / текст / ==== разделитель
-  ```
-- `index.csv`: `url;title;file;pages;posts;status`, кодировка `utf-8-sig`.
-- Оверлей умеет работать и без `index.csv`: подхватывает все `laws/*.txt`,
-  `law_id/title` выводит из имени файла.
+Использовать `.venv\Scripts\python.exe` на Windows, `.venv/bin/python` на Linux.
+Системный Python не использовать. Для тестов задавать отдельные
+`AMAZING_OVERLAY_PIPE`, `AMAZING_OVERLAY_DATA`, `QT_QPA_PLATFORM=offscreen`.
 
-## Архитектура оверлея (law_overlay.py)
-- `load_config()` — merge `DEFAULT_CONFIG` + `config.json`, затем override
-  из env/`.env` (`AI_*`). Ключ хранится только в `.env`, в `config.json` не пишется.
-- `OverlayWindow(QMainWindow)` — флаги
-  `FramelessWindowHint | WindowStaysOnTopHint | Tool` + `WA_ShowWithoutActivating`.
-  - Режимы: `set_click_through(True)` = `WS_EX_TRANSPARENT`, клики идут в игру;
-    `False` = интерактивный (поиск, чат, drag/resize).
-  - Состояние hide/show (только между свернуть/развернуть, не между запусками):
-    `hideEvent` сохраняет `_saved_law_filename/_saved_scroll`,
-    `showEvent` + `show_preserved()` восстанавливают. `toggle()` НЕ перезагружает
-    базу и НЕ центрирует. `center_on_screen()` только при `_first_show`.
-  - `populate(restore_filename, preserve_current=True)` — сохраняет выбор;
-    поиск (`filter_laws`) вызывает с `preserve_current=False` (прыжок на топ-результат).
-  - `select_law` при `_restoring_state` не сбрасывает скролл в 0.
-  - Drag: только в фокусе, за `self.top_bar` (`_header_hit` + mousePress/Move/Release).
-    Клики по кнопкам/инпутам drag не начинают.
-  - Resize: свободный, только в фокусе, через `QSizeGrip` справа внизу.
-    `toggle_chat()` размер меняет, но НЕ центрирует.
-- `AppController` — владеет окном, треем, хоткеями, `IndexWorker`.
-  `toggle()` = hide/show без сброса. `reindex()` сохраняет поиск/выбор.
-- `GlobalHotkey` — отдельный `threading.Thread` на хоткей через Win32
-  `RegisterHotKey/GetMessageW`. ID с 1000. Сигналы `activated/registration_failed`.
-- `SettingsDialog` — хоткеи, ширина/высота/скорость скролла, AI provider/key/base_url/model.
-- `IndexWorker(QThread)` — только прогрев файлового кэша, настоящего индекса нет.
-- `AIWorker(QThread)` — `openai`-совместимый путь использует настройки модели;
-  Gemini-путь использует захардкоженную модель (см. Known quirks).
+- `python -m unittest discover -s tests -v`
+- `python -m py_compile legacy/law_overlay.py`
+- `python legacy/test_overlay_linux.py --smoke`
+- `ctest --test-dir native/out-local --output-on-failure` после нативной сборки.
+- `python scripts/check_portable.py Release/AmazingLawOverlay.exe --settings-check --browser-check`
+- `python scripts/publish_release.py --check`
 
-## Хоткеи по умолчанию (config.json)
-- toggle `Ctrl+L`, search `Alt+F`, scroll `Alt+Up/Down` (speed 100px),
-  prev/next law `Alt+Left/Right`, `Esc` = hide.
-- `Alt+F` переключает click-through <-> интерактив.
+Проверки Windows-ввода и фокуса выполняются в игре; headless и D3D9-host проверяют
+только интерфейс, протокол и регрессии. Не инжектировать модуль автоматически.
+Загруженный ASI/DLL обновляется только после полного перезапуска игры.
 
-## Конфиг
-- `config.json`: `hotkeys.*`, `window.{width,height,opacity}`, `scroll_speed`,
-  `ai_provider/ai_base_url/ai_model`, `close_on_original_click`.
-- `.env`: `AI_API_KEY` + дубли провайдера. Приоритет env > config.json.
+## Инварианты
 
-## Запуск
-Windows (прод):
-- `run_overlay.bat` — venv + `requirements_overlay.txt` + `pythonw law_overlay.py`.
-- `run_parser.bat` — venv + `requirements_playwright.txt` + `playwright install chromium` + парсер.
-Linux (только тест окна):
-- `.venv/bin/python test_overlay_linux.py` — ручной тест.
-- `QT_QPA_PLATFORM=offscreen .venv/bin/python test_overlay_linux.py --smoke` — headless.
-- Системным python не запускать (нет deps); Windows-путь `main()` на Linux упадет — так и должно.
+- Не возвращать центрирование при каждом show, сброс документа или прокрутки.
+- Фоновые запросы, индексация, файлы и API не выполняются в UI/игровом потоке.
+- Состояния: скрыт, просмотр, ввод. После Alt+Tab/сворачивания остаётся скрыт.
+  Отпускать захват ввода без перетягивания фокуса; не допускать автоповтор хоткеев.
+- Drag только за шапку; новые кнопки и поля не должны запускать перетаскивание.
+- Заметки не индексируются как законы и не отправляются ИИ автоматически.
+  Сохранение проверяет ревизию файла и активную корневую папку.
+- UTF-8 для новых текстов; `laws/index.csv` — utf-8-sig с разделителем `;`.
+  Переносы строк, BOM и CP1251 существующих заметок сохраняются.
+- Локальные данные не удалять при реорганизации или публикации Release.
 
-## Правила для агентов
-- Проверки после правок: `.venv/bin/python -m py_compile law_overlay.py`
-  и smoke выше. GUI-логику Windows-хоткеев на Linux не чинить — они там не работают.
-- Кодировки: новые `txt` писать в `utf-8`, `index.csv` читать/писать `utf-8-sig`,
-  разделитель `;`. Фолбэк чтения `cp1251` уже есть в `read_text_file`.
-- Не коммитить: `.venv/`, `.browser-profile/`, `debug/`, `.env`, `__pycache__/`.
-- Окно frameless: любые новые кнопки в шапке должны оставаться кликабельными
-  (drag игнорирует `QPushButton/QLineEdit/QComboBox`).
-- Не возвращать центрирование при каждом show и сброс списка в `toggle()` —
-  это уже починено, не регрессировать.
-
-## Known quirks (не ломать молча, чинить явно)
-- `filter_laws` читает все файлы на каждый ввод — на большой базе фризит UI.
-- Gemini в `AIWorker` игнорирует выбранную модель, всегда `gemini-3.5-flash-lite`.
-- `receive_chat_message` удаляет плейсхолдер «ИИ думает...» через `BlockUnderCursor` — хрупко.
-- `GlobalHotkey.activated` эмитится из не-Qt потока.
+Подробности: `docs/V2.md`, `docs/NOTEBOOK.md`, `docs/PROTOCOL.md`.
