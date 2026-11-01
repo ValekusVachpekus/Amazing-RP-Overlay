@@ -191,6 +191,7 @@ class ManagerWindow(RemoteWindow):
             item = action(title, lambda checked=False, i=index: self.tabs.setCurrentIndex(i), nav,
                           "nav", self.style().standardIcon(icon))
             item.setCheckable(True)
+            item.setAutoExclusive(True)
             self.nav_buttons.append(item)
         nav.addStretch()
         action("Папка законов", self.open_laws, nav, icon=self.style().standardIcon(QStyle.SP_DirOpenIcon))

@@ -235,6 +235,8 @@ class IntegrationTest(unittest.TestCase):
                 restored.tabs.setCurrentIndex(i)
                 self.app.processEvents()
                 self.assertTrue(restored.nav_buttons[i].isChecked())
+                restored.nav_buttons[i].click()
+                self.assertTrue(restored.nav_buttons[i].isChecked(), 'The current section cannot be unchecked')
                 restored.grab().save(str(ROOT / f'.cache/desktop-manager-{i}.png'))
         finally:
             restored.close()
