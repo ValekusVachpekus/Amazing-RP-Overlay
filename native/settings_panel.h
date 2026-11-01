@@ -35,6 +35,8 @@ struct SettingsPanel {
     Json effective = Json::object(), openedValues = Json::object();
     int provider = 0, maxTokens = 1500;
     std::array<char, 2048> address{}, model{}, key{};
+    std::array<char,8192> notesDirectory{};
+    std::array<char,80> notesHotkey{};
     void Receive(const Json& settings, bool savedResult = false);
     void Open();
     void Cancel();

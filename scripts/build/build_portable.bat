@@ -17,6 +17,7 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 .venv\Scripts\python.exe scripts/check_portable.py .cache/dist/portable-build/AmazingLawOverlay/AmazingLawOverlay.exe --settings-check --browser-check
 if errorlevel 1 exit /b 1
+if "%~1"=="--stage-only" exit /b 0
 .venv\Scripts\python.exe scripts/publish_release.py
 if errorlevel 1 exit /b 1
 echo Complete portable package copied to Release.

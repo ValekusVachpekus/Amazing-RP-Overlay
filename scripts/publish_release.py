@@ -12,10 +12,12 @@ ROOT = Path(__file__).resolve().parent.parent
 RELEASE = ROOT / "Release"
 MANIFEST = "manifest.json"
 REQUIRED = (
+    "start.bat",
     "AmazingLawOverlay.exe", "AmazingLawClient.dll", "AmazingLawClient.asi",
     "start_manager.bat", "start_backend.bat", "start_overlay.bat",
     "start_install-browser.bat",
 )
+PERSONAL = {"Notes", "local", "laws", "browser-profile", ".browser-profile", ".env", "config.json", "urls.txt"}
 
 
 def digest(path):
@@ -32,7 +34,7 @@ def _digest(stream):
 
 def safe_path(directory, name):
     path = directory / name
-    if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()) or name == MANIFEST:
+    if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()) or name == MANIFEST or name.split('/')[0] in PERSONAL:
         raise ValueError(f"Unsafe release path: {name}")
     return path
 
@@ -40,6 +42,9 @@ def safe_path(directory, name):
 def files_in(directory):
     files = {}
     for path in directory.rglob("*"):
+        relative = path.relative_to(directory)
+        if relative.parts[0] in PERSONAL or (len(relative.parts) == 1 and path.suffix == '.log'):
+            continue
         if path.is_symlink():
             raise ValueError(f"Links are not allowed in the release: {path}")
         if path.is_file():
@@ -82,7 +87,7 @@ def publish(bundle):
         for relative, path in files_in(directory).items():
             sources[f"{name}/{relative}"] = path
     sources["README.md"] = ROOT / "docs" / "RELEASE.md"
-    for name in ("V2.md", "PROTOCOL.md", "GAME_ACCEPTANCE.md"):
+    for name in ("V2.md", "PROTOCOL.md", "GAME_ACCEPTANCE.md", "NOTEBOOK.md"):
         sources[f"docs/{name}"] = ROOT / "docs" / name
     entries = {}
     for name, source in sorted(sources.items()):
@@ -100,6 +105,16 @@ def publish(bundle):
             raise ValueError("Release has unmanaged files; move them out before updating")
     # Validate every old path before deleting stale manifest-owned files.
     stale = [safe_path(RELEASE, name) for name in set(old) - set(entries)]
+    # Fail before changing any payload if Windows has a running EXE/DLL locked.
+    # Opening for write checks access; no bytes are written by this preflight.
+    for name, entry in entries.items():
+        target = safe_path(RELEASE, name)
+        if target.exists() and digest(target) != entry["sha256"]:
+            try:
+                with target.open("r+b"):
+                    pass
+            except PermissionError:
+                raise ValueError("Закройте программы из Release перед обновлением: " + name) from None
     RELEASE.mkdir(exist_ok=True)
     for name, source in sources.items():
         target = safe_path(RELEASE, name)

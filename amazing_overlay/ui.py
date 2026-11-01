@@ -4,7 +4,7 @@ import html
 import json
 import sys
 
-from PySide6.QtCore import QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
+from PySide6.QtCore import QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QAction, QFont, QIcon, QTextCursor
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                               QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -22,7 +22,7 @@ from .win32 import Hotkeys, activate, belongs_to_game, foreground, parse_hotkey,
 STYLE = """
 QWidget {background:#111827;color:#e2e8f0;font-family:'Segoe UI';font-size:14px;}
 QMainWindow,QDialog {background:#111827;}
-QLineEdit,QTextEdit,QTextBrowser,QListWidget,QTableWidget,QComboBox,QSpinBox,QDoubleSpinBox {
+QLineEdit,QTextEdit,QPlainTextEdit,QTextBrowser,QTreeWidget,QListWidget,QTableWidget,QComboBox,QSpinBox,QDoubleSpinBox {
  background:#172235;border:1px solid #334155;border-radius:6px;padding:6px;selection-background-color:#2563eb;}
 QPushButton {background:#253348;border:1px solid #40516b;border-radius:6px;padding:7px 12px;}
 QPushButton:hover {background:#354967;} QPushButton:disabled {color:#64748b;}
@@ -259,6 +259,7 @@ class ManagerWindow(RemoteWindow):
         layout = self.tab("Оформление и клавиши")
         form = QFormLayout()
         for key, title in (("toggle_hotkey", "Показать / скрыть"), ("input_hotkey", "Переключить ввод"),
+                           ("notes_hotkey", "Блокнот / новая заметка"),
                            ("prev_law_hotkey", "Предыдущий закон"), ("next_law_hotkey", "Следующий закон"),
                            ("scroll_up_hotkey", "Прокрутка вверх"), ("scroll_down_hotkey", "Прокрутка вниз")):
             self.inputs[key] = QLineEdit()
@@ -272,6 +273,9 @@ class ManagerWindow(RemoteWindow):
         opacity.setSingleStep(0.05)
         self.inputs["opacity"] = opacity
         form.addRow("Прозрачность", opacity)
+        self.inputs["notes_dir"] = QLineEdit()
+        self.inputs["notes_dir"].setPlaceholderText("По умолчанию: Notes рядом с проектом / программой")
+        form.addRow("Папка заметок (полный путь)", self.inputs["notes_dir"])
         layout.addLayout(form)
         layout.addWidget(QLabel("Esc: ввод → просмотр → скрыть. Alt+↑/↓: прокрутка в режиме просмотра.\nПосле изменения клавиш перезапустите клиент."))
         button("Сохранить", self.save_settings, layout)
@@ -470,6 +474,9 @@ class OverlayWindow(RemoteWindow):
         self.restoring = True
         self.state = {"favorites": [], "recent": []}
         self.messages = []
+        self.notebook = None
+        self.notes_open = False
+        self.notes_beside = False
         self.ai_busy = False
         self.drag_offset = None
         self.root = QWidget()
@@ -482,6 +489,10 @@ class OverlayWindow(RemoteWindow):
         self.top.installEventFilter(self)
         title.installEventFilter(self)
         self.list_button = button("Список", lambda: self.toggle_panel(self.left), top)
+        button("Блокнот", self.toggle_notebook, top)
+        self.beside_button = QCheckBox("Рядом")
+        self.beside_button.toggled.connect(self.set_notes_beside)
+        top.addWidget(self.beside_button)
         button("Чат", lambda: self.toggle_panel(self.chat), top)
         button("↗", self.expand, top)
         button("Настройки", self.manager, top)
@@ -573,6 +584,50 @@ class OverlayWindow(RemoteWindow):
         self.documents = []
         self.task(lambda: (ensure_backend(), rpc("settings"), rpc("documents"), rpc("state_get", {"key": "overlay", "default": {}})), self.ready)
 
+    def toggle_notebook(self, checked=False, force=False):
+        if not self.notebook:
+            from .notebook_ui import NotebookWidget
+            self.notebook = NotebookWidget()
+            QApplication.instance().aboutToQuit.connect(self.notebook.flush)
+            self.notebook.attach.connect(self.attach_note)
+            self.splitter.addWidget(self.notebook)
+        opening = not self.notes_open
+        if opening:
+            self.notes_previous_panels = (not self.left.isHidden(), not self.chat.isHidden())
+        self.notes_open = True if force else not self.notes_open
+        if not self.notes_open:
+            self.notebook.flush()
+        self.notebook.setVisible(self.notes_open)
+        self.middle.setVisible(not self.notes_open or self.notes_beside)
+        if self.notes_open:
+            self.left.hide()
+            self.chat.hide()
+            self.resize(max(self.width(), 1100 if self.notes_beside else 850), self.height())
+        else:
+            left, chat = getattr(self, "notes_previous_panels", (False, False))
+            self.left.setVisible(left)
+            self.chat.setVisible(chat)
+        self.search.setVisible(not self.notes_open or self.notes_beside)
+        self.schedule_save()
+
+    def set_notes_beside(self, value):
+        self.notes_beside = value
+        if self.notes_open:
+            self.middle.setVisible(value)
+            self.search.setVisible(value)
+            if value:
+                self.resize(max(1100, self.width()), self.height())
+        self.schedule_save()
+
+    def attach_note(self, text):
+        if self.chat_input.toPlainText().strip():
+            if QMessageBox.question(self, "Черновик чата", "Заменить существующий черновик текстом заметки?") != QMessageBox.Yes:
+                return
+        self.chat_input.setPlainText(text)
+        self.chat.show()
+        self.resize(max(1200, self.width()), self.height())
+        self.chat_input.setFocus()
+
     def setup_tray(self):
         icon = QApplication.style().standardIcon(QStyle.SP_FileDialogInfoView)
         self.tray = QSystemTrayIcon(icon, self)
@@ -587,12 +642,22 @@ class OverlayWindow(RemoteWindow):
     def ready(self, values):
         _, settings, self.documents, state = values
         self.state.update(state or {})
+        self.notes_beside = self.state.get("notes_beside", False)
+        self.beside_button.setChecked(self.notes_beside)
         try:
             self.hotkeys.configure(settings)
         except ValueError as exc:
             self.error(str(exc))
             self.tray.showMessage("Горячие клавиши", str(exc))
         self.setWindowOpacity(settings["opacity"])
+        self.appearance_settings = settings
+        style = STYLE.replace("font-size:14px", f"font-size:{settings['font_size']}px")
+        if settings.get("theme") == "light":
+            for dark, light in (("#111827", "#f0f4f8"), ("#e2e8f0", "#182b40"), ("#172235", "#ffffff"),
+                                ("#253348", "#d5e3f0"), ("#334155", "#a5b8ca"), ("#354967", "#b9d4ed"),
+                                ("#1e293b", "#e2eaf3"), ("#93c5fd", "#185e94")):
+                style = style.replace(dark, light)
+        self.setStyleSheet(style)
         self.reader.setFont(QFont("Segoe UI", settings["font_size"]))
         geometry = self.state.get("geometry")
         if geometry and len(geometry) == 4:
@@ -743,23 +808,54 @@ class OverlayWindow(RemoteWindow):
         activate(int(self.winId()))
         self.search.setFocus()
 
+    def fade_visibility(self, visible):
+        settings = getattr(self, "appearance_settings", {})
+        target = settings.get("opacity", .96) if visible else 0.0
+        animation = getattr(self, "visibility_animation", None)
+        if animation:
+            animation.stop()
+            animation.deleteLater()
+        if not settings.get("animations", True):
+            self.setWindowOpacity(target)
+            if not visible:
+                self.hide()
+            return
+        animation = QPropertyAnimation(self, b"windowOpacity", self)
+        self.visibility_animation = animation
+        animation.setDuration(200)
+        animation.setEasingCurve(QEasingCurve.InOutCubic)
+        animation.setStartValue(self.windowOpacity())
+        animation.setEndValue(target)
+        animation.finished.connect(lambda: self.hide() if self.mode == "hidden" else None)
+        animation.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.setWindowOpacity(0)
+        self.fade_visibility(True)
+
     def leave_input(self, return_game=True):
         self.set_mode("view")
         if return_game and self.game_hwnd and foreground() == int(self.winId()):
             activate(self.game_hwnd)
 
     def hide_overlay(self):
+        if self.notebook:
+            self.notebook.flush()
         self.save_state()
         self.leave_input()
         self.mode = "hidden"
-        self.hide()
+        self.fade_visibility(False)
 
     def toggle(self):
-        if self.isVisible():
+        if self.isVisible() and self.mode != "hidden":
             self.hide_overlay()
         else:
             self.set_mode("view")
-            self.show()
+            if self.isVisible():
+                self.fade_visibility(True)
+            else:
+                self.show()
 
     def hotkey(self, action):
         current = foreground()
@@ -767,15 +863,29 @@ class OverlayWindow(RemoteWindow):
             return
         if belongs_to_game(current):
             self.game_hwnd = current
+        if action == "notes":
+            if self.notebook and self.notes_open and self.notebook.editor.hasFocus():
+                self.notebook.new_note()
+            else:
+                self.toggle_notebook(force=True)
+                self.enter_input()
+                self.notebook.editor.setFocus()
+            return
         if action == "toggle":
             self.toggle()
         elif action == "input":
             self.leave_input() if self.mode == "input" else self.enter_input()
         elif action == "escape" and self.isVisible():
+            if self.notebook and self.notes_open and self.notebook.escape():
+                return
             self.leave_input() if self.mode == "input" else self.hide_overlay()
         elif self.isVisible() and action in {"prev_law", "next_law"}:
+            if self.notebook and self.notebook.editor.hasFocus():
+                return
             self.switch_law(1 if action == "next_law" else -1)
         elif self.isVisible() and action.startswith("scroll_"):
+            if self.notebook and self.notebook.editor.hasFocus():
+                return
             bar = self.reader.verticalScrollBar()
             bar.setValue(bar.value() + (100 if action == "scroll_down" else -100))
 
@@ -804,7 +914,11 @@ class OverlayWindow(RemoteWindow):
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.ApplicationDeactivate and self.mode == "input":
+            if self.notebook:
+                self.notebook.flush()
             self.leave_input(return_game=False)
+            self.mode = "hidden"
+            self.hide()
         if watched in {self.top} or (isinstance(watched, QLabel) and watched.parent() is self.top):
             if event.type() == QEvent.MouseButtonPress and self.mode == "input" and event.button() == Qt.LeftButton:
                 self.drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -825,7 +939,8 @@ class OverlayWindow(RemoteWindow):
             return
         rect = self.geometry()
         self.state.update(geometry=[rect.x(), rect.y(), rect.width(), rect.height()], document=self.current_id,
-                          scroll=self.reader.verticalScrollBar().value(), left=not self.left.isHidden(), chat=not self.chat.isHidden())
+                          scroll=self.reader.verticalScrollBar().value(), left=not self.left.isHidden(), chat=not self.chat.isHidden(),
+                          notes_beside=self.notes_beside)
         self.call("state_set", {"key": "overlay", "value": dict(self.state)})
 
     def resizeEvent(self, event):
@@ -844,6 +959,8 @@ class OverlayWindow(RemoteWindow):
         question = self.chat_input.toPlainText().strip()
         if not question:
             return
+        if len(question) > 12000:
+            return self.error("Предел сообщения — 12000 символов. Выделите меньший фрагмент заметки")
         ids = None
         if self.scope.currentIndex() == 1:
             ids = [self.current_id] if self.current_id else []
@@ -954,6 +1071,8 @@ class OverlayWindow(RemoteWindow):
         event.ignore()
 
     def quit(self):
+        if self.notebook:
+            self.notebook.flush()
         self.save_state()
         self.cancel_jobs()
         self.hotkeys.clear()

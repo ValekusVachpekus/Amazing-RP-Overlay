@@ -105,7 +105,8 @@ class Hotkeys(QAbstractNativeEventFilter):
                   (2003, "scroll_up", parse_hotkey(settings.get("scroll_up_hotkey", "Alt+Up"))),
                   (2004, "scroll_down", parse_hotkey(settings.get("scroll_down_hotkey", "Alt+Down"))),
                   (2005, "prev_law", parse_hotkey(settings.get("prev_law_hotkey", "Alt+Left"))),
-                  (2006, "next_law", parse_hotkey(settings.get("next_law_hotkey", "Alt+Right")))]
+                  (2006, "next_law", parse_hotkey(settings.get("next_law_hotkey", "Alt+Right"))),
+                  (2007, "notes", parse_hotkey(settings.get("notes_hotkey", "Ctrl+N")))]
         if len({value for _, _, value in parsed}) != len(parsed):
             raise ValueError("Горячие клавиши совпадают")
         self.desired = parsed
@@ -122,7 +123,7 @@ class Hotkeys(QAbstractNativeEventFilter):
             return
         failures = []
         for ident, action, (mods, key) in self.desired:
-            if not visible and action not in {"toggle", "input"}:
+            if not visible and action not in {"toggle", "input", "notes"}:
                 continue
             if user32.RegisterHotKey(None, ident, mods, key):
                 self.registered.append(ident)

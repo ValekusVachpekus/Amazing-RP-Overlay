@@ -13,7 +13,7 @@ from .browsers import configure_browser_environment
 def main():
     configure_browser_environment()
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["backend", "manager", "overlay", "install-browser"], nargs="?", default="manager")
+    parser.add_argument("mode", choices=["backend", "manager", "overlay", "launcher", "install-browser"], nargs="?", default="launcher")
     args = parser.parse_args()
     DATA.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(filename=DATA / "diagnostics.log", level=logging.INFO, encoding="utf-8")
@@ -42,8 +42,13 @@ def main():
         app.setApplicationName("Amazing Law Overlay 2")
         from .ui import ManagerWindow, OverlayWindow, BrowserInstaller, STYLE
         app.setStyleSheet(STYLE)
-        window = BrowserInstaller() if args.mode == "install-browser" else ManagerWindow() if args.mode == "manager" else OverlayWindow()
-        window.show()
+        if args.mode == "launcher":
+            from .launcher import LauncherWindow
+            window = LauncherWindow()
+        else:
+            window = BrowserInstaller() if args.mode == "install-browser" else ManagerWindow() if args.mode == "manager" else OverlayWindow()
+        if args.mode != "overlay":
+            window.show()
     return app.exec()
 
 

@@ -55,6 +55,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     auto visibility = reinterpret_cast<Probe>(GetProcAddress(library, "AmazingOverlayVisibilityForTest"));
     using SettingsPreview = void(__cdecl*)(int, int);
     auto settingsPreview = reinterpret_cast<SettingsPreview>(GetProcAddress(library, "AmazingOverlaySettingsForTest"));
+    auto notebookPreview = reinterpret_cast<Show>(GetProcAddress(library, "AmazingOverlayNotebookForTest"));
+    bool previewedNotebook=false;
     bool previewedSettings = false;
     using Diagnostics = void(__cdecl*)(char*, unsigned);
     auto diagnostics = reinterpret_cast<Diagnostics>(GetProcAddress(library, "AmazingOverlayDiagnostics"));
@@ -71,6 +73,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         device->Present(nullptr, nullptr, nullptr, nullptr);
         if (selfTest) {
             if (probe() & 1u) show();
+            if(!previewedNotebook && notebookPreview && probe()==3u && wcsstr(command,L"--notebook")){
+                notebookPreview();previewedNotebook=true;
+            }
             if (!previewedSettings && settingsPreview && probe() == 3u && wcsstr(command, L"--settings")) {
                 settingsPreview(wcsstr(command, L"--large") ? 26 : 17, wcsstr(command, L"--light") ? 1 : 0);
                 previewedSettings = true;

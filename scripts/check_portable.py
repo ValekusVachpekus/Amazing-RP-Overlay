@@ -40,6 +40,14 @@ def main():
             rpc("state_set", {"key": "portable-test", "value": "работает"})
             assert rpc("state_get", {"key": "portable-test"}) == "работает"
             print("PORTABLE BACKEND: PASS; no local laws or credentials bundled")
+            assert health.get("notes"), "Update the backend for notebook support"
+            notes_root = Path(directory) / "Личные заметки"
+            rpc("settings_save", {"notes_dir": str(notes_root)})
+            note = rpc("notes_create", {"path": "Проверка.txt", "text": "Привет\nСтатья 12"})
+            saved = rpc("notes_save", {"path": note["path"], "text": "Обновлено", "revision": note["revision"]})
+            assert not saved["conflict"] and notes_root.joinpath(note["path"]).read_text(encoding="utf-8") == "Обновлено"
+            assert rpc("notes_save", {"path": note["path"], "text": "stale", "revision": note["revision"]})["conflict"]
+            print("PORTABLE NOTEBOOK: PASS; UTF-8, atomic save and revision conflicts")
             if "--settings-check" in sys.argv:
                 assert health.get("native_settings"), "Update the backend for in-game settings"
                 saved = rpc("settings_save", {"opacity": .3, "font_size": 26, "theme": "light", "animations": False})
@@ -66,7 +74,7 @@ def main():
                 assert status["result"]["ok"]
                 assert "_internal" not in status["result"]["browsers_dir"], "Frozen driver reverted to bundle-local browsers"
                 print("PORTABLE CHROMIUM LAUNCH: PASS")
-            for mode in ("manager", "overlay"):
+            for mode in ("manager", "overlay", "launcher"):
                 client = subprocess.Popen([str(executable), mode], cwd=executable.parent, env=env)
                 try:
                     time.sleep(3)

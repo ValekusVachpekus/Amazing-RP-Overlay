@@ -16,6 +16,8 @@ jobs:
       - run: python -m unittest discover -s tests -p test_backend.py -v
       - run: python -m unittest discover -s tests -p test_parser.py -v
       - run: python -m unittest discover -s tests -p test_browsers.py -v
+      - run: python -m unittest discover -s tests -p test_notes.py -v
+      - run: python -m unittest discover -s tests -p test_release.py -v
   native:
     runs-on: windows-latest
     steps:

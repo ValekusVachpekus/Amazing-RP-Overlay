@@ -2,6 +2,7 @@
 #include "input_policy.h"
 #include "display_text.h"
 #include "settings_panel.h"
+#include "notebook_panel.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <dinput.h>
@@ -42,6 +43,7 @@ struct State {
     std::string settingsMessage, testJob;
     std::shared_ptr<const Json> document;
     Binding toggle{'L', true, false, false}, input{'F', false, true, false};
+    Binding notes{'N',true,false,false};
     Binding previousLaw{VK_LEFT, false, true, false}, nextLaw{VK_RIGHT, false, true, false};
     Binding scrollUp{VK_UP, false, true, false}, scrollDown{VK_DOWN, false, true, false};
     std::string selectedId;
@@ -59,6 +61,8 @@ WNDPROC previousProc = nullptr;
 IDirect3DDevice9* activeDevice = nullptr;
 bool initialized = false;
 SettingsPanel settingsPanel;
+notebook::NotebookPanel& Notebook() { static auto* value=new notebook::NotebookPanel();return *value; }
+std::atomic<bool> flushNotebook{false};
 std::array<ImFont*, 13> uiFonts{};
 RECT previousClip{};
 using EndSceneFn = HRESULT(WINAPI*)(IDirect3DDevice9*);
@@ -134,6 +138,7 @@ bool Pressed(const Binding& binding) {
 void SetMode(Mode next, bool restoreClip = true) {
     Mode old = mode.exchange(next);
     if (old == next) return;
+    if (old == Mode::Input && next != Mode::Input) flushNotebook=true;
     Log(std::string("Mode: ") + (next == Mode::Input ? "input" : next == Mode::View ? "view" : "hidden"));
     if (next == Mode::Input) { GetClipCursor(&previousClip); ClipCursor(nullptr); }
     else if (old == Mode::Input && restoreClip && GetForegroundWindow() == gameWindow) ClipCursor(&previousClip);
@@ -241,6 +246,7 @@ void Refresh() {
             S().settings = settings; ++S().settingsRevision;
             S().toggle = ParseBinding(settings.value("toggle_hotkey", "Ctrl+L"), S().toggle);
             S().input = ParseBinding(settings.value("input_hotkey", "Alt+F"), S().input);
+            S().notes = ParseBinding(settings.value("notes_hotkey", "Ctrl+N"), S().notes);
             S().previousLaw = ParseBinding(settings.value("prev_law_hotkey", "Alt+Left"), S().previousLaw);
             S().nextLaw = ParseBinding(settings.value("next_law_hotkey", "Alt+Right"), S().nextLaw);
             S().scrollUp = ParseBinding(settings.value("scroll_up_hotkey", "Alt+Up"), S().scrollUp);
@@ -305,8 +311,10 @@ BOOL WINAPI CursorClip(const RECT* rectangle) {
 }
 
 void Draw() {
+    auto& notebook=Notebook(); notebook.Tick();
+    if(flushNotebook.exchange(false))notebook.Flush();
     static bool showList = false, showChat = false, previousToggle = false, previousInput = false, previousEscape = false;
-    static char search[512]{}, question[8192]{};
+    static char search[512]{}, question[65536]{};
     static std::string sentSearch;
     static DocumentSearch readerSearch;
     static bool previousFindNext = false;
@@ -319,7 +327,7 @@ void Draw() {
     static ULONGLONG lastScrollRepeat = 0;
     static std::string renderedId;
     auto& state = S();
-    Binding toggle, input, previousLaw, nextLaw, scrollUp, scrollDown;
+    Binding toggle, input, previousLaw, nextLaw, scrollUp, scrollDown, notes;
     Json documents, hits, sources;
     std::string status, answer, selectedId, settingsMessage;
     bool settingsPending, testing;
@@ -328,6 +336,7 @@ void Draw() {
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         toggle = state.toggle; input = state.input;
+        notes=state.notes;
         previousLaw = state.previousLaw; nextLaw = state.nextLaw;
         scrollUp = state.scrollUp; scrollDown = state.scrollDown;
         if (settingsRevision != state.settingsRevision) {
@@ -345,17 +354,28 @@ void Draw() {
         }
     }
     bool focused = GetForegroundWindow() == gameWindow;
+    static bool previousNotes=false;
+    bool n=focused && Pressed(notes);
+    if(n && !previousNotes) {
+        if(notebook.Editing() && mode==Mode::Input) notebook.NewNote();
+        else {notebook.Open();showList=false;SetMode(Mode::Input);}
+    }
+    previousNotes=n;
     bool t = focused && Pressed(toggle), i = focused && Pressed(input), e = focused && Down(VK_ESCAPE);
     if (t && !previousToggle) SetMode(mode == Mode::Hidden ? Mode::View : Mode::Hidden);
     if (i && !previousInput) SetMode(mode == Mode::Input ? Mode::View : Mode::Input);
     if (e && !previousEscape && mode != Mode::Hidden) {
-        if (settingsPanel.open && !settingsPending && !testing) settingsPanel.Cancel();
-        SetMode(mode == Mode::Input ? Mode::View : Mode::Hidden);
+        if(ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId)) { /* popup owns Esc */ }
+        else if(notebook.open && notebook.Escape()) { }
+        else {
+            if (settingsPanel.open && !settingsPending && !testing) settingsPanel.Cancel();
+            SetMode(mode == Mode::Input ? Mode::View : Mode::Hidden);
+        }
     }
     previousToggle = t; previousInput = i; previousEscape = e;
     bool left = focused && Pressed(previousLaw), right = focused && Pressed(nextLaw);
     bool up = focused && Pressed(scrollUp), down = focused && Pressed(scrollDown);
-    if (mode != Mode::Hidden && ((left && !previousLeft) || (right && !previousRight))) {
+    if (mode != Mode::Hidden && !notebook.Editing() && ((left && !previousLeft) || (right && !previousRight))) {
         std::vector<std::string> ids;
         for (const auto& item : searching ? hits : documents) ids.push_back(item.value(searching ? "doc_id" : "id", ""));
         auto target = overlay_input::NextDocument(ids, selectedId, right && !previousRight ? 1 : -1);
@@ -363,7 +383,7 @@ void Draw() {
     }
     float scrollDelta = 0;
     const auto ticks = GetTickCount64();
-    if (mode != Mode::Hidden && (up || down) && ((!previousUp && up) || (!previousDown && down) || ticks - lastScrollRepeat >= 100)) {
+    if (mode != Mode::Hidden && !notebook.Editing() && (up || down) && ((!previousUp && up) || (!previousDown && down) || ticks - lastScrollRepeat >= 100)) {
         scrollDelta = down ? 100.0f : -100.0f;
         lastScrollRepeat = ticks;
     }
@@ -383,7 +403,7 @@ void Draw() {
     ImGui::SetNextWindowSize(ImVec2(1100, 720), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(60, 80), ImGuiCond_FirstUseEver);
     ImGuiWindowFlags flags = mode == Mode::Input ? 0 : ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove;
-    ImGui::Begin("AMAZING / ЗАКОНЫ", nullptr, flags);
+    ImGui::Begin("AMAZING / ЗАКОНЫ • Автор: Vladislav_Shetkov###amazing-main", nullptr, flags);
     const auto position = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
     const ImVec2 bounded(std::clamp(position.x, 0.f, std::max(0.f, screen.x - size.x)), std::clamp(position.y, 0.f, std::max(0.f, screen.y - size.y)));
     if (bounded.x != position.x || bounded.y != position.y) ImGui::SetWindowPos(bounded);
@@ -395,11 +415,18 @@ void Draw() {
             Rpc("state_set", {{"key", "native"}, {"value", prefs}});
         });
     };
+    auto headerLine=[&](float nextWidth){
+        const float right=ImGui::GetWindowPos().x+ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-ImGui::GetStyle().ScrollbarSize;
+        if(ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+nextWidth*scale<=right)ImGui::SameLine();
+    };
     if (ImGui::Button(showList ? "Законы: открыты" : "Законы", ImVec2(160 * scale, 36 * scale))) { showList = !showList; savePanels(); }
-    ImGui::SameLine(); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145 * scale, 36 * scale))) { showChat = !showChat; savePanels(); }
-    ImGui::SameLine(); if (ImGui::Button("Обновить", ImVec2(110 * scale, 36 * scale))) Refresh();
-    ImGui::SameLine(); if (ImGui::Button("Скрыть", ImVec2(95 * scale, 36 * scale))) SetMode(Mode::Hidden);
-    ImGui::SameLine();
+    headerLine(145); if (ImGui::Button(showChat ? "ИИ: открыт" : "ИИ-помощник", ImVec2(145 * scale, 36 * scale))) { showChat = !showChat; savePanels(); }
+    headerLine(150); if(ImGui::Button(notebook.open ? "Блокнот: открыт" : "Блокнот", ImVec2(150*scale,36*scale))) {
+        if(notebook.open){notebook.Flush();notebook.open=false;}else {notebook.Open();showList=false;}
+    }
+    headerLine(110); if (ImGui::Button("Обновить", ImVec2(110 * scale, 36 * scale))) Refresh();
+    headerLine(95); if (ImGui::Button("Скрыть", ImVec2(95 * scale, 36 * scale))) SetMode(Mode::Hidden);
+    headerLine(36);
     const auto gearPosition = ImGui::GetCursorScreenPos();
     if (ImGui::InvisibleButton("settings-gear", ImVec2(36 * scale, 36 * scale)) && !settingsPending && !testing) {
         if (settingsPanel.open) settingsPanel.Cancel(); else { settingsPanel.Open(); SetMode(Mode::Input); }
@@ -439,6 +466,15 @@ void Draw() {
         }
         ImGui::End();
         return;
+    }
+    auto attachNote=[&](const std::string& text){
+        if(text.size()>=sizeof(question)){Status("Для чата выделите меньший фрагмент");return;}
+        if(question[0]){Status("В чате уже есть черновик. Скопируйте или очистите его перед добавлением заметки");return;}
+        memcpy(question,text.c_str(),text.size()+1);showChat=true;notebook.Flush();notebook.open=false;
+    };
+    if(notebook.open && !notebook.beside) {
+        notebook.Draw(mode==Mode::Input,attachNote);
+        ImGui::End();return;
     }
     ImGui::Spacing();
     ImGui::SetNextItemWidth(std::max(150.0f, ImGui::GetContentRegionAvail().x - 285 * scale));
@@ -509,7 +545,10 @@ void Draw() {
         ImGui::EndChild();
         ImGui::SameLine();
     }
-    float readerWidth = showChat ? std::max(240.0f * scale, ImGui::GetContentRegionAvail().x - 350 * scale) : 0;
+    const bool besideNotes=notebook.open && notebook.beside;
+    const float readerAvailable=ImGui::GetContentRegionAvail().x;
+    const float readerHeight=std::max(20.f,ImGui::GetContentRegionAvail().y-26);
+    float readerWidth = besideNotes ? std::max(180.f*scale,readerAvailable*notebook.lawFraction) : showChat ? std::max(240.0f * scale, ImGui::GetContentRegionAvail().x - 350 * scale) : 0;
     ImGui::BeginChild("reader", ImVec2(readerWidth, -26), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
     const auto docId = document ? document->value("id", "") : "";
     if (docId != renderedId) { ImGui::SetScrollY(0); renderedId = docId; readerSearch.active = 0; readerSearch.jump = true; }
@@ -523,7 +562,13 @@ void Draw() {
         DrawDocument(*document, &readerSearch);
     } else ImGui::TextWrapped("%s", status.c_str());
     ImGui::EndChild();
-    if (showChat) {
+    if(besideNotes){
+        ImGui::SameLine();ImGui::InvisibleButton("reader-notes-split",ImVec2(5,readerHeight));
+        if(mode==Mode::Input && ImGui::IsItemActive())notebook.lawFraction=std::clamp(notebook.lawFraction+ImGui::GetIO().MouseDelta.x/readerAvailable,.25f,.7f);
+        if(ImGui::IsItemHovered())ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        ImGui::SameLine();notebook.Draw(mode==Mode::Input,attachNote);
+    }
+    if (showChat && !besideNotes) {
         ImGui::SameLine();
         ImGui::BeginChild("chat", ImVec2(0, -26), ImGuiChildFlags_Borders);
         static bool onlyCurrent = false;
@@ -531,6 +576,7 @@ void Draw() {
         ImGui::InputTextMultiline("##question", question, sizeof(question), ImVec2(-1, 95));
         if (ImGui::Button(busy ? "Ожидание…" : "Отправить") && !busy && question[0]) {
             std::string text(question);
+            if(notebook::Decode(text).size()>12000){Status("Предел сообщения — 12000 символов; текст не отправлен");ImGui::EndChild();ImGui::TextDisabled("Сократите черновик чата");ImGui::End();return;}
             question[0] = 0;
             Json scope = onlyCurrent && document ? Json::array({document->value("id", "")}) : Json();
             { std::lock_guard<std::mutex> lock(state.mutex); state.busy = true; state.answer.clear(); state.sources = Json::array(); }
@@ -591,8 +637,12 @@ HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
         int needed = WideCharToMultiByte(CP_UTF8, 0, fontPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
         std::string utf8(needed, '\0');
         WideCharToMultiByte(CP_UTF8, 0, fontPath.c_str(), -1, utf8.data(), needed, nullptr, nullptr);
+        static ImVector<ImWchar> glyphs;
+        ImFontGlyphRangesBuilder ranges;ranges.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+        static const ImWchar punctuation[]={0x2000,0x206f,0x2116,0x2116,0};ranges.AddRanges(punctuation);ranges.BuildRanges(&glyphs);
+        io.Fonts->TexDesiredWidth=2048;
         for (int size = 14; size <= 26; ++size)
-            uiFonts[size - 14] = io.Fonts->AddFontFromFileTTF(utf8.c_str(), static_cast<float>(size), nullptr, io.Fonts->GetGlyphRangesCyrillic());
+            uiFonts[size - 14] = io.Fonts->AddFontFromFileTTF(utf8.c_str(), static_cast<float>(size), nullptr, glyphs.Data);
         io.FontDefault = uiFonts[3];
         ApplyAppearance(Appearance{}, 1);
         ImGui_ImplWin32_Init(gameWindow);
@@ -745,6 +795,10 @@ extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayVisibilityForTes
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlaySettingsForTest(int font, int light) {
     settingsPanel.Open(); settingsPanel.draft.font = std::clamp(font, 14, 26);
     settingsPanel.draft.light = light != 0;
+}
+
+extern "C" __declspec(dllexport) void __cdecl AmazingOverlayNotebookForTest() {
+    Notebook().Open();Notebook().beside=false;
 }
 
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayDiagnostics(char* buffer, unsigned size) {

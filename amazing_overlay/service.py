@@ -14,6 +14,7 @@ from .parser import Cancelled, browser_session, check_cancel, export_laws, parse
 from .browsers import configure_browser_environment
 from .settings import DATA, ROOT, load_settings, save_settings, preview_settings
 from .store import Store
+from .notes import Notes
 
 
 class Backend:
@@ -24,6 +25,7 @@ class Backend:
         self.browser_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="backend-job")
         self.jobs = {}
+        self.notes = Notes(root, data, load_settings)
         self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws")
         urls = root / "local" / "urls.txt" if (root / "local" / "urls.txt").exists() else root / "urls.txt"
         if not self.store.get_preference("sources_initialized", False):
@@ -67,8 +69,10 @@ class Backend:
 
     def dispatch(self, method, params):
         if method == "health":
-            return {"version": 1, "app_version": __version__, "native_settings": True, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
+            return {"version": 1, "app_version": __version__, "native_settings": True, "notes": True, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
                     "browsers_dir": configure_browser_environment(), "import_warnings": self.import_warnings}
+        if method.startswith("notes_"):
+            return self.notes.dispatch(method, params)
         if method == "documents":
             return self.store.documents()
         if method == "document":

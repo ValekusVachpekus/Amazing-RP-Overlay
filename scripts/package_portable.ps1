@@ -11,6 +11,8 @@ foreach ($clientMode in @('manager', 'overlay', 'backend', 'install-browser')) {
     $batchText = "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" AmazingLawOverlay.exe $clientMode`r`n"
     [System.IO.File]::WriteAllText((Join-Path $bundleDirectory "start_$clientMode.bat"), $batchText)
 }
+$launcherBatch = "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" AmazingLawOverlay.exe launcher`r`n"
+[System.IO.File]::WriteAllText((Join-Path $bundleDirectory 'start.bat'), $launcherBatch)
 $nativeCandidates = @(
     (Join-Path $projectRoot '.cache/dist/native-latest/AmazingLawClient.dll'),
     (Join-Path $projectRoot 'native/out/Release/AmazingLawClient.dll'),

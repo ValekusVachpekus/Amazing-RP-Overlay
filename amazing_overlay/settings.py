@@ -14,6 +14,7 @@ PIPE_NAME = os.getenv("AMAZING_OVERLAY_PIPE", "amazing-law-overlay-v2")
 DEFAULTS = {"ai_provider": "openai", "ai_base_url": "https://openrouter.ai/api/v1", "ai_model": "openrouter/free",
             "max_tokens": 1500, "context_chars": 32000, "font_size": 17, "opacity": 0.96,
             "theme": "dark", "animations": True,
+            "notes_dir": "", "notes_hotkey": "Ctrl+N",
             "toggle_hotkey": "Ctrl+L", "input_hotkey": "Alt+F", "prev_law_hotkey": "Alt+Left",
             "next_law_hotkey": "Alt+Right", "scroll_up_hotkey": "Alt+Up", "scroll_down_hotkey": "Alt+Down"}
 
@@ -78,6 +79,10 @@ def validated_settings(values: dict):
         raise ValueError("Укажите адрес API http(s) без ключа и пароля в адресе")
     if not str(current["ai_model"]).strip():
         raise ValueError("Укажите модель ИИ")
+    if not isinstance(current["notes_dir"], str) or "\x00" in current["notes_dir"]:
+        raise ValueError("Некорректная папка заметок")
+    if current["notes_dir"] and not Path(current["notes_dir"]).is_absolute():
+        raise ValueError("Выберите абсолютный путь папки заметок")
     from .win32 import parse_hotkey
     bindings = [parse_hotkey(current[key]) for key in DEFAULTS if key.endswith("_hotkey")]
     if len(set(bindings)) != len(bindings) or any(value[1] == 27 for value in bindings):

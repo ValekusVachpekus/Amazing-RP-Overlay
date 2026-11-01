@@ -41,6 +41,9 @@ class IntegrationTest(unittest.TestCase):
                 store.publish({"schema_version": 1, "id": "test-table", "url": "", "title": "000 • Таблицы", "structured": True,
                                "pages": 1, "posts": [{"post_id": "table", "author": "", "blocks": parse_html(
                                    '<h3>Статья 12. Таблица</h3><table><tr><th rowspan="2">Ведомство</th><th colspan="2">Должности</th></tr><tr><th>Руководитель</th><th>Заместитель</th></tr><tr><td>МВД</td><td>Генерал</td><td>Полковник</td></tr></table>', "")} ]})
+                rpc("settings_save", {"notes_dir": str(Path(cls.temporary.name) / "notes")})
+                rpc("notes_create", {"path": "Пример.txt", "text": "Мои игровые заметки\n\nСтатья 12 — пример записи.\nМожно читать закон и писать рядом.\n\nРусский текст, поиск, сохранение и отмена изменений."})
+                rpc("state_set", {"key": "notebook-native", "value": {"path": "Пример.txt"}})
                 return
             except ConnectionError:
                 time.sleep(0.1)
@@ -72,6 +75,67 @@ class IntegrationTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             rpc("unknown_method")
 
+    def test_notebook_widget_autosave_search_undo_and_recovery(self):
+        from amazing_overlay import notebook_ui
+        from PySide6.QtGui import QTextCursor
+        root = Path(self.temporary.name) / "Мои заметки"
+        rpc("settings_save", {"notes_dir": str(root)})
+        value = rpc("notes_create", {"path": "Тест.txt", "text": "Первая строка\nСтатья 12 и статья 13"})
+        with patch.object(notebook_ui, "DATA", Path(self.temporary.name)):
+            widget = notebook_ui.NotebookWidget()
+            widget.resize(1000, 640)
+            widget.show()
+            try:
+                self.events_until(lambda: bool(widget.root_path))
+                widget.open_note(value["path"])
+                self.events_until(lambda: widget.current is not None and not widget.loading)
+                widget.editor.moveCursor(QTextCursor.End)
+                widget.editor.insertPlainText("\nДополнение")
+                self.events_until(lambda: not widget.dirty and not widget.saving)
+                self.assertIn("Дополнение", rpc("notes_read", {"path": value["path"]})["text"])
+                widget.find_text.setText("СТАТЬЯ")
+                self.assertEqual(len(widget.matches), 2)
+                widget.step(1)
+                self.assertEqual(widget.editor.textCursor().selectedText().casefold(), "статья")
+                widget.find_text.clear()
+                widget.editor.undo()
+                self.assertNotIn("Дополнение", widget.editor.toPlainText())
+                widget.editor.redo()
+                self.assertIn("Дополнение", widget.editor.toPlainText())
+                widget.save()
+                self.events_until(lambda: not widget.dirty and not widget.saving)
+                widget.editor.moveCursor(QTextCursor.End)
+                widget.editor.insertPlainText("\nЧерновик при разрыве")
+                real_rpc = notebook_ui.rpc
+                def disconnected(method, params=None):
+                    if method == "notes_save":
+                        raise ConnectionError("Тест: бэкенд недоступен")
+                    return real_rpc(method, params)
+                with patch.object(notebook_ui, "rpc", disconnected):
+                    widget.save()
+                    self.events_until(lambda: not widget.saving)
+                drafts = list((Path(self.temporary.name) / 'notes-recovery').glob('*.json'))
+                self.assertTrue(drafts)
+                self.assertIn('Черновик при разрыве', drafts[0].read_text(encoding='utf-8'))
+                widget.grab().save(str(ROOT / ".cache/notebook-qt-preview.png"))
+                widget.save()
+                self.events_until(lambda: not widget.dirty and not widget.saving)
+            finally:
+                widget.close()
+                widget.deleteLater()
+
+    def test_launcher_window(self):
+        from amazing_overlay.launcher import LauncherWindow
+        window = LauncherWindow()
+        window.show()
+        try:
+            self.events_until(lambda: 'Бэкенд работает' in window.status.text())
+            self.assertIn('Автор: Vladislav_Shetkov', window.windowTitle())
+            self.assertTrue(window.grab().save(str(ROOT / '.cache/launcher-preview.png')))
+        finally:
+            window.timer.stop()
+            window.close()
+
     def test_native_dx9_host_and_same_rpc(self):
         binary = ROOT / "native" / "out-local" / "overlay_native_smoke.exe"
         if not binary.exists():
@@ -85,6 +149,12 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("Hooking game cursor recenter / clip", log)
         self.assertIn("First EndScene callback received", log)
         self.assertIn("Renderer initialized", log)
+        capture = ROOT / ".cache/notebook-native-preview.bmp"
+        result = subprocess.run([str(binary), "--self-test", "--notebook"], cwd=binary.parent, timeout=20,
+                                env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name, AMAZING_OVERLAY_CAPTURE=str(capture)),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        self.assertTrue(capture.exists())
 
     def test_manager_offscreen(self):
         from amazing_overlay.ui import ManagerWindow

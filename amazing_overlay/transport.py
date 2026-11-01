@@ -81,10 +81,21 @@ class Work(QRunnable):
             self.signals.failed.emit(str(exc))
 
 
+_active_work = set()
+
+
 def background(function, done, failed):
     work = Work(function)
-    work.signals.done.connect(done)
-    work.signals.failed.connect(failed)
+    # A QRunnable is auto-deleted by Qt. Keep its Python signal object alive until
+    # the queued GUI callback has run, including callers without their own work set.
+    _active_work.add(work)
+    def finish(callback, value):
+        try:
+            callback(value)
+        finally:
+            _active_work.discard(work)
+    work.signals.done.connect(lambda value: finish(done, value))
+    work.signals.failed.connect(lambda value: finish(failed, value))
     QThreadPool.globalInstance().start(work)
     return work
 

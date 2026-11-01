@@ -53,6 +53,8 @@ void SettingsPanel::Open() {
     };
     copy(address, effective.value("ai_base_url", "https://openrouter.ai/api/v1"));
     copy(model, effective.value("ai_model", "openrouter/free"));
+    copy(notesDirectory,effective.value("notes_dir",""));
+    copy(notesHotkey,effective.value("notes_hotkey","Ctrl+N"));
     maxTokens = effective.value("max_tokens", 1500);
     key.fill(0);
     openedValues = Values();
@@ -64,6 +66,7 @@ Json SettingsPanel::Values() const {
     Json value = {{"opacity", draft.opacity}, {"font_size", draft.font}, {"theme", draft.light ? "light" : "dark"},
                  {"animations", draft.animations}, {"ai_provider", provider ? "gemini" : "openai"},
                  {"ai_base_url", address.data()}, {"ai_model", model.data()}, {"max_tokens", maxTokens}};
+    value["notes_dir"]=notesDirectory.data();value["notes_hotkey"]=notesHotkey.data();
     if (key[0]) value["ai_api_key"] = key.data();
     return value;
 }
@@ -83,6 +86,11 @@ SettingsPanel::Action SettingsPanel::Draw(bool busy, bool testing, const std::st
     ImGui::SliderInt("##font", &draft.font, 14, 26, "Размер шрифта везде: %d px");
     ImGui::Checkbox("Светлая тема", &draft.light);
     ImGui::Checkbox("Плавное появление и скрытие (0,2 с)", &draft.animations);
+    ImGui::Spacing();ImGui::Separator();ImGui::TextUnformatted("БЛОКНОТ");
+    ImGui::TextWrapped("Папка заметок: полный путь. Пусто — Notes рядом с проектом / программой. Файлы автоматически не переносятся.");
+    ImGui::SetNextItemWidth(-1);ImGui::InputText("##notes-dir",notesDirectory.data(),notesDirectory.size());
+    ImGui::TextUnformatted("Открыть блокнот / новая заметка (после изменения перезапустите клиент):");
+    ImGui::SetNextItemWidth(-1);ImGui::InputText("##notes-hotkey",notesHotkey.data(),notesHotkey.size());
     ImGui::Spacing(); ImGui::Separator(); ImGui::TextUnformatted("ИИ / API");
     ImGui::SetNextItemWidth(-1);
     if (ImGui::Combo("##provider", &provider, "OpenRouter / OpenAI-compatible\0Gemini\0")) {
