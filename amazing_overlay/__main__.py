@@ -14,6 +14,7 @@ def main():
     configure_browser_environment()
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["backend", "manager", "overlay", "launcher", "install-browser"], nargs="?", default="launcher")
+    parser.add_argument("--page", choices=["sources", "update", "ai", "appearance", "diagnostics"], default="sources", help="Начальный раздел менеджера")
     args = parser.parse_args()
     DATA.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(filename=DATA / "diagnostics.log", level=logging.INFO, encoding="utf-8")
@@ -38,6 +39,9 @@ def main():
         lock = QLockFile(str(DATA / (args.mode + ".lock")))
         lock.setStaleLockTime(0)
         if not lock.tryLock(0):
+            if args.mode == "manager":
+                from .manager_navigation import send
+                return 0 if send(args.page) else 1
             return 0
         app.setApplicationName("Amazing Law Overlay 2")
         from .ui import ManagerWindow, OverlayWindow, BrowserInstaller, STYLE
@@ -47,6 +51,10 @@ def main():
             window = LauncherWindow()
         else:
             window = BrowserInstaller() if args.mode == "install-browser" else ManagerWindow() if args.mode == "manager" else OverlayWindow()
+        if args.mode == "manager":
+            from .manager_navigation import ManagerNavigation, PAGES
+            window.tabs.setCurrentIndex(PAGES.index(args.page))
+            window.navigation_server = ManagerNavigation(window)
         if args.mode != "overlay":
             window.show()
     return app.exec()

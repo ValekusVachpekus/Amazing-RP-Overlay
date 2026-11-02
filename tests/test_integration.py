@@ -133,17 +133,137 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn('Автор: Vladislav_Shetkov', window.windowTitle())
             self.assertFalse(window.start_button.isEnabled())
             self.assertTrue(window.stop_button.isEnabled())
+            self.assertIn(window.stop_button.grab().toImage().pixelColor(10, 10).name(),
+                          ('#23232f', '#30283f', '#403052'))
             from PySide6.QtGui import QPixmap
             for asset in ('check.svg', 'up.svg', 'down.svg'):
                 self.assertFalse(QPixmap(str(ROOT / 'amazing_overlay/assets' / asset)).isNull(), asset)
             with patch('amazing_overlay.launcher.open_folder') as opened:
                 window.open_laws()
                 opened.assert_called_once_with(self.temporary.name)
+            from PySide6.QtWidgets import QLabel
+            from PySide6.QtGui import QFont
+            title = window.manager_card.findChild(QLabel, 'cardTitle')
+            self.assertEqual(title.font().pixelSize(), 17)
+            self.assertEqual(title.font().weight(), QFont.Bold)
+            for width, columns in ((1440, 3), (980, 2), (760, 1), (1440, 3)):
+                window.resize(width, 900)
+                self.app.processEvents()
+                self.assertEqual(window.apps_grid.columns, columns)
+                cards = [window.manager_card, window.overlay_card, window.native_card]
+                for first, second in zip(cards, cards[1:]):
+                    self.assertFalse(first.geometry().intersects(second.geometry()))
+                self.assertLessEqual(window.apps_grid.width(), window.overview.width())
+            window.folder.set_path('C:/' + 'Очень длинная папка заметок/' * 40)
+            self.app.processEvents()
+            self.assertEqual(window.width(), 1440)
+            self.assertIn('Очень длинная', window.folder.toolTip())
+            with patch.object(window, 'launch') as launch:
+                window.nav_buttons['manager'].click()
+                window.nav_buttons['overlay'].click()
+                window.nav_buttons['settings'].click()
+                self.assertEqual(launch.call_args_list, [unittest.mock.call('manager'), unittest.mock.call('overlay'), unittest.mock.call('manager', 'appearance')])
+            window.nav_buttons['notes'].click()
+            self.assertTrue(window.nav_buttons['notes'].isChecked())
+            window.nav_buttons['overview'].click()
+            self.assertEqual(window.scroll.verticalScrollBar().value(), 0)
             # Late worker callbacks after closing must not touch a deleted window.
             self.assertTrue(window.grab().save(str(ROOT / '.cache/launcher-preview.png')))
         finally:
             window.timer.stop()
             window.close()
+
+    def test_launcher_states_and_stale_results(self):
+        from amazing_overlay import launcher
+        calls = []
+        health = rpc('health')
+        with patch.object(launcher, 'background', side_effect=lambda work, done, failed: calls.append((work, done, failed))):
+            window = launcher.LauncherWindow()
+            window.timer.stop()
+            try:
+                self.assertFalse(window.start_button.isEnabled())
+                calls[0][2]('Бэкенд не запущен')
+                self.assertTrue(window.start_button.isEnabled())
+                self.assertFalse(window.online)
+                with patch('amazing_overlay.launcher.open_folder') as opened:
+                    window.open_laws()
+                    opened.assert_called_once()
+                window.start_button.click()
+                self.assertTrue(window.operation)
+                self.assertFalse(window.start_button.isEnabled())
+                self.assertFalse(window.stop_button.isEnabled())
+                self.assertIn('Запускается', window.badge.text())
+                count = len(calls)
+                window.start_button.click()
+                self.assertEqual(len(calls), count)
+                # An old poll may finish after an explicit start operation.
+                calls[0][1]((health, {}, ''))
+                self.assertFalse(window.online)
+                calls[-1][1](health)
+                self.assertTrue(window.online)
+                window.can_stop = True
+                window.update_buttons()
+                window.stop_button.click()
+                self.assertIn('Останавливается', window.badge.text())
+                calls[-1][2]('Не удалось завершить запись')
+                self.assertFalse(window.operation)
+                self.assertIn('Не удалось', window.notice.text())
+                # A notes-folder error must not turn a healthy backend offline.
+                window.check()
+                self.assertTrue(window.pending)
+                calls[0][1]((health, {}, ''))
+                self.assertTrue(window.pending)  # A stale reply cannot clear a newer poll.
+                calls[-1][1]((health, {}, 'Папка недоступна'))
+                self.assertTrue(window.online)
+                self.assertIn('Заметки недоступны', window.folder.full_text)
+                self.assertIn('Не удалось', window.notice.text())
+                window.close()
+                calls[-1][1]((health, {}, ''))  # Late reply after close is harmless.
+            finally:
+                window.close()
+        with patch.object(launcher, 'background'), patch.object(sys, 'frozen', True, create=True):
+            portable = launcher.LauncherWindow()
+            try:
+                self.assertNotIn('development', portable.nav_buttons)
+                self.assertIsNone(portable.developer_card)
+                self.assertEqual(len(portable.secondary_grid.cards), 1)
+                self.assertEqual(portable.secondary_grid.columns, 1)
+            finally:
+                portable.close()
+
+    def test_manager_navigation_reuses_window(self):
+        from PySide6.QtCore import QLockFile
+        from amazing_overlay import manager_navigation
+        from amazing_overlay.ui import ManagerWindow
+        window = ManagerWindow()
+        server = manager_navigation.ManagerNavigation(window)
+        lock = QLockFile(str(Path(self.temporary.name) / "manager.lock"))
+        self.assertTrue(lock.tryLock(0))
+        try:
+            self.assertTrue(server.listening)
+            for page, index in (("appearance", 3), ("ai", 2)):
+                # A second real CLI process must forward to this existing
+                # manager and exit, rather than opening another GUI instance.
+                child = subprocess.Popen([sys.executable, "-m", "amazing_overlay", "manager", "--page", page],
+                                         cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name))
+                try:
+                    self.events_until(lambda: child.poll() is not None)
+                    output, error = child.communicate(timeout=3)
+                    self.assertEqual(child.returncode, 0, error.decode(errors="replace"))
+                    self.assertEqual(window.tabs.currentIndex(), index)
+                    self.assertTrue(window.nav_buttons[index].isChecked())
+                finally:
+                    if child.poll() is None:
+                        child.terminate()
+                        child.communicate(timeout=3)
+            with self.assertRaises(ValueError):
+                manager_navigation.send("nonexistent")
+        finally:
+            lock.unlock()
+            server.server.close()
+            window.close()
+            self.events_until(lambda: not window.work)
 
     def test_native_dx9_host_and_same_rpc(self):
         binary = ROOT / "native" / "out-local" / "overlay_native_smoke.exe"

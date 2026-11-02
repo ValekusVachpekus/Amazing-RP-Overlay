@@ -83,6 +83,12 @@ def main():
                     time.sleep(3)
                     assert client.poll() is None, f"Frozen {mode} failed to start: {client.returncode}"
                     print(f"PORTABLE {mode.upper()}: PASS")
+                    if mode == "manager":
+                        forwarded = subprocess.run([str(executable), "manager", "--page", "appearance"],
+                                                   cwd=executable.parent, env=env, timeout=15)
+                        assert forwarded.returncode == 0, "Settings navigation must reuse the running manager"
+                        assert client.poll() is None, "The original manager must remain open"
+                        print("PORTABLE MANAGER NAVIGATION: PASS")
                 finally:
                     if client.poll() is None:
                         client.terminate()
