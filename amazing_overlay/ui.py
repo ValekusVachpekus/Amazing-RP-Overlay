@@ -5,7 +5,7 @@ import json
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import QByteArray, QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation
+from PySide6.QtCore import QByteArray, QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation, Signal
 from PySide6.QtGui import QAction, QFont, QIcon, QTextCursor
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                               QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -85,8 +85,8 @@ class BrowserInstaller(QMainWindow):
 
 
 class RemoteWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.work = set()
         self.jobs = {}
         self.polling = False
@@ -160,12 +160,21 @@ class RemoteWindow(QMainWindow):
 
 
 class ManagerWindow(RemoteWindow):
-    def __init__(self):
-        super().__init__()
-        setup_desktop(self)
+    settings_saved = Signal(dict)
+
+    def __init__(self, parent=None, embedded=False):
+        super().__init__(parent)
+        self.embedded = embedded
+        if embedded:
+            from .launcher_presentation import STYLE as manager_style
+            self.setWindowFlags(Qt.Widget)
+            self.setStyleSheet(manager_style)
+        else:
+            setup_desktop(self)
         self.setWindowTitle("Amazing • Управление базой и настройками • " + AUTHOR)
-        self.resize(1320, 840)
-        self.setMinimumSize(1040, 620)
+        if not embedded:
+            self.resize(1320, 840)
+            self.setMinimumSize(1040, 620)
         self.data_dir = None
         self.header_ready = False
         root = QWidget()
@@ -197,9 +206,10 @@ class ManagerWindow(RemoteWindow):
         action("Папка законов", self.open_laws, nav, icon=self.style().standardIcon(QStyle.SP_DirOpenIcon))
         nav.addWidget(label(AUTHOR))
         outer.addWidget(sidebar)
+        sidebar.setVisible(not embedded)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(22, 22, 22, 14)
+        layout.setContentsMargins(*((0, 0, 0, 0) if embedded else (22, 22, 22, 14)))
         layout.setSpacing(14)
         self.tabs = QTabWidget()
         self.tabs.tabBar().hide()
@@ -223,8 +233,27 @@ class ManagerWindow(RemoteWindow):
         self.header_timer.timeout.connect(self.save_header)
         self.sources.horizontalHeader().sectionResized.connect(self.header_changed)
         self.select_section(0)
+        self.retry_button = action("Повторить подключение", self.connect_backend, layout)
+        self.retry_button.hide()
+        self.connect_backend()
+
+    def connect_backend(self):
+        self.retry_button.hide()
+        self.tabs.setEnabled(False)
+        self.status.setText("Подключение к бэкенду…")
         self.task(lambda: (ensure_backend(), rpc("settings"), rpc("sources"),
                            rpc("state_get", {"key": "desktop-sources-header", "default": ""})), self.ready)
+
+    def error(self, message):
+        super().error(message)
+        if not self.header_ready:
+            self.retry_button.show()
+
+    def row(self):
+        if self.embedded:
+            from .launcher_presentation import FlowLayout
+            return FlowLayout()
+        return QHBoxLayout()
 
     def select_section(self, index):
         for i, item in enumerate(self.nav_buttons):
@@ -244,7 +273,7 @@ class ManagerWindow(RemoteWindow):
     def make_sources(self):
         layout = self.tab("Источники")
         heading(layout, "Источники законов", "Добавляйте темы форума, проверяйте документы и управляйте обновлениями.")
-        controls = QHBoxLayout()
+        controls = self.row()
         action("Добавить источник", self.add_source, controls, "primary")
         action("Импорт ссылок…", self.import_urls, controls)
         action("Экспорт ссылок…", self.export_urls, controls)
@@ -279,7 +308,7 @@ class ManagerWindow(RemoteWindow):
         self.sources.itemDoubleClicked.connect(lambda _: self.preview_selected())
         self.sources.itemSelectionChanged.connect(self.update_source_actions)
         layout.addWidget(self.sources, 1)
-        line = QHBoxLayout()
+        line = self.row()
         self.source_actions = [action("Предпросмотр", self.preview_selected, line),
                                action("Изменить…", self.edit_source, line),
                                action("Вкл. / выкл.", self.enable_source, line),
@@ -329,13 +358,13 @@ class ManagerWindow(RemoteWindow):
         heading(layout, "Обновление базы", "Загрузка идёт в фоне. При ошибке сохраняется последняя успешная версия закона.")
         self.visible_browser = QCheckBox("Открыть браузер для ручной проверки сайта (может переключить фокус игры)")
         layout.addWidget(self.visible_browser)
-        controls = QHBoxLayout()
+        controls = self.row()
         action("Обновить выбранные", lambda: self.update(False), controls, "primary")
         action("Все включённые", lambda: self.update(True), controls)
         action("Отменить задачи", self.cancel_jobs, controls, "danger")
         controls.addStretch()
         layout.addLayout(controls)
-        tools = QHBoxLayout()
+        tools = self.row()
         action("Экспорт законов в TXT/JSON…", self.export_documents, tools)
         action("Установить Chromium", self.install_browser, tools)
         tools.addStretch()
@@ -351,6 +380,7 @@ class ManagerWindow(RemoteWindow):
         heading(layout, "ИИ и подключение к API", "Настройте провайдера и модель. Ключ хранится отдельно от программы.")
         form = QFormLayout()
         form.setSpacing(16)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.provider = QComboBox()
         self.provider.addItem("OpenRouter / OpenAI-compatible", "openai")
         self.provider.addItem("Gemini", "gemini")
@@ -371,7 +401,7 @@ class ManagerWindow(RemoteWindow):
         self.env_label = QLabel()
         self.env_label.setWordWrap(True)
         layout.addWidget(self.env_label)
-        controls = QHBoxLayout()
+        controls = self.row()
         action("Сохранить настройки", self.save_settings, controls, "primary")
         action("Проверить сохранённое соединение", self.test_ai, controls)
         controls.addStretch()
@@ -386,6 +416,7 @@ class ManagerWindow(RemoteWindow):
         heading(layout, "Оформление и клавиши", "Общие настройки ридера и блокнота для внутриигрового и обычного оверлея.")
         form = QFormLayout()
         form.setSpacing(14)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         for key, title in (("toggle_hotkey", "Показать / скрыть"), ("input_hotkey", "Переключить ввод"),
                            ("notes_hotkey", "Блокнот / новая заметка"),
                            ("prev_law_hotkey", "Предыдущий закон"), ("next_law_hotkey", "Следующий закон"),
@@ -412,7 +443,7 @@ class ManagerWindow(RemoteWindow):
         form.addRow("Папка заметок (полный путь)", self.inputs["notes_dir"])
         layout.addLayout(form)
         layout.addWidget(label("Esc: ввод → просмотр → скрыть. Для обычного оверлея изменение горячих клавиш требует перезапуска клиента."))
-        controls = QHBoxLayout()
+        controls = self.row()
         action("Сохранить настройки", self.save_settings, controls, "primary")
         action("Запустить обычный оверлей", self.launch_overlay, controls)
         controls.addStretch()
@@ -422,7 +453,7 @@ class ManagerWindow(RemoteWindow):
     def make_diagnostics(self):
         layout = self.tab("Диагностика")
         heading(layout, "Диагностика", "Версия сервиса, состояние базы и проверка браузера парсера.")
-        controls = QHBoxLayout()
+        controls = self.row()
         action("Обновить состояние", lambda: self.call("health", done=self.show_health), controls, "primary")
         action("Проверить Chromium", lambda: self.start_job("browser_check", done=self.show_health), controls)
         controls.addStretch()
@@ -448,6 +479,8 @@ class ManagerWindow(RemoteWindow):
             header.setStretchLastSection(False)
             header.setSectionResizeMode(QHeaderView.Interactive)
         self.header_ready = True
+        self.tabs.setEnabled(True)
+        self.retry_button.hide()
         self.status.setText(f"Бэкенд подключён • версия {health['app_version']} • законов: {health['documents']}")
 
     def apply_settings(self, values):
@@ -476,7 +509,11 @@ class ManagerWindow(RemoteWindow):
         except ValueError as exc:
             self.error(str(exc))
             return
-        self.call("settings_save", values, lambda result: (self.apply_settings(result), self.status.setText("Настройки сохранены")))
+        def saved(result):
+            self.apply_settings(result)
+            self.status.setText("Настройки сохранены")
+            self.settings_saved.emit(result)
+        self.call("settings_save", values, saved)
 
     def show_sources(self, values):
         selected = set(self.selected_ids())
@@ -485,7 +522,7 @@ class ManagerWindow(RemoteWindow):
         self.sources.clearSelection()
         self.sources.setRowCount(len(values))
         for row, source in enumerate(values):
-            title = source["title"] or source["id"]
+            title = " ".join((source["title"] or source["id"]).replace("\ufeff", "").replace("\u200b", "").replace("\u2800", " ").split())
             for prefix in ("ЗАКРЕПЛЕНО ", "ИНФОРМАЦИЯ "):
                 title = title.removeprefix(prefix)
             updated = source.get("updated") or "—"
@@ -534,17 +571,7 @@ class ManagerWindow(RemoteWindow):
 
     def preview(self, url, replaces=None):
         def ready(result, job_id):
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Предпросмотр • " + result["document"]["title"])
-            dialog.resize(900, 650)
-            layout = QVBoxLayout(dialog)
-            reader = browser()
-            reader.setHtml(result["html"])
-            layout.addWidget(reader)
-            buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-            buttons.accepted.connect(dialog.accept)
-            buttons.rejected.connect(dialog.reject)
-            layout.addWidget(buttons)
+            dialog = self.preview_dialog(result)
             if dialog.exec() == QDialog.Accepted:
                 self.call("preview_save", {"job_id": job_id, "replaces": replaces}, lambda _: self.refresh_sources())
 
@@ -554,6 +581,27 @@ class ManagerWindow(RemoteWindow):
             self.jobs[ident] = (lambda result: ready(result, ident), self.progress, lambda: None)
             self.status.setText("Загрузка предпросмотра…")
         self.call("preview", {"url": url, "visible": self.visible_browser.isChecked()}, started)
+
+    def preview_dialog(self, result):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Предпросмотр • " + result["document"]["title"])
+        dialog.resize(900, 650)
+        layout = QVBoxLayout(dialog)
+        reader = browser()
+        if self.embedded:
+            from .documents import document_html
+            from .launcher_presentation import DOCUMENT_STYLE
+            reader.setHtml(document_html(result["document"], stylesheet=DOCUMENT_STYLE))
+        else:
+            reader.setHtml(result["html"])
+        layout.addWidget(reader)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Save).setText("Сохранить источник")
+        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return dialog
 
     def import_urls(self):
         path, _ = QFileDialog.getOpenFileName(self, "Импорт ссылок", str(ROOT / "local" / "urls.txt"), "Текст (*.txt)")
@@ -627,6 +675,7 @@ class ManagerWindow(RemoteWindow):
             self.header_timer.stop()
             self.save_header()
         self.cancel_jobs()
+        self.timer.stop()
         self.closed = True
         super().closeEvent(event)
 

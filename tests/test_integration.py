@@ -159,14 +159,68 @@ class IntegrationTest(unittest.TestCase):
             self.assertEqual(window.width(), 1440)
             self.assertIn('Очень длинная', window.folder.toolTip())
             with patch.object(window, 'launch') as launch:
-                window.nav_buttons['manager'].click()
                 window.nav_buttons['overlay'].click()
-                window.nav_buttons['settings'].click()
-                self.assertEqual(launch.call_args_list, [unittest.mock.call('manager'), unittest.mock.call('overlay'), unittest.mock.call('manager', 'appearance')])
-            window.nav_buttons['notes'].click()
-            self.assertTrue(window.nav_buttons['notes'].isChecked())
+                launch.assert_called_once_with('overlay')
+            self.assertNotIn('notes', window.nav_buttons)
+            self.assertNotIn('development', window.nav_buttons)
+            window.nav_buttons['manager'].click()
+            self.events_until(lambda: window.manager.header_ready)
+            manager = window.manager
+            self.assertFalse(manager.isWindow())
+            self.assertIs(manager.window(), window)
+            self.assertIs(window.pages.currentWidget(), window.manager_host)
+            manager.sources.selectRow(0)
+            selected = manager.selected_ids()
+            manager.source_filter.setText(manager.source_values[0]['id'])
+            window.nav_buttons['settings'].click()
+            self.assertEqual(manager.tabs.currentIndex(), 3)
+            manager.inputs['ai_model'].setText('unsaved-model-draft')
+            window.open_manager_page('ai')
+            self.assertTrue(window.nav_buttons['settings'].isChecked())
+            self.assertTrue(window.subnav_buttons[2].isChecked())
+            window.nav_buttons['manager'].click()
+            self.assertEqual(manager.tabs.currentIndex(), 0)
+            self.assertEqual(manager.selected_ids(), selected)
+            self.assertEqual(manager.source_filter.text(), manager.source_values[0]['id'])
+            self.assertEqual(manager.inputs['ai_model'].text(), 'unsaved-model-draft')
+            self.assertIs(window.manager, manager)
+            sources = [dict(item) for item in manager.source_values]
+            sources[0]['title'] = '\ufeff ЗАКРЕПЛЕНО\n\u2800 Трудовой\nкодекс '
+            manager.show_sources(sources)
+            self.assertEqual(manager.sources.item(0, 1).text(), 'Трудовой кодекс')
+            self.assertIn('ЗАКРЕПЛЕНО', sources[0]['title'])  # Display-only cleanup.
+            with patch.object(manager, 'start_job') as job:
+                manager.update(False)
+                job.assert_called_once()
+                self.assertEqual(manager.tabs.currentIndex(), 1)
+                self.assertTrue(window.subnav_buttons[1].isChecked())
+            from PySide6.QtWidgets import QTextBrowser
+            preview = manager.preview_dialog(rpc('document', {'id': 'test-table'}))
+            reader = preview.findChild(QTextBrowser)
+            self.assertIn('Полковник', reader.toPlainText())
+            self.assertIn('rowspan="2"', reader.toHtml())
+            preview.close()
+            original_settings = rpc('settings')
+            try:
+                manager.apply_settings(original_settings)
+                manager.inputs['toggle_hotkey'].setText('F1')
+                manager.inputs['font_size'].setValue(23)
+                manager.save_settings()
+                self.events_until(lambda: 'Настройки сохранены' == manager.status.text())
+                self.assertEqual(rpc('settings')['toggle_hotkey'], 'F1')
+                self.assertEqual(rpc('settings')['font_size'], 23)
+            finally:
+                rpc('settings_save', {key: original_settings[key] for key in ('toggle_hotkey', 'font_size')})
+            for page in ('sources', 'update', 'diagnostics', 'appearance', 'ai'):
+                window.open_manager_page(page)
+                window.resize(760, 600)
+                self.app.processEvents()
+                self.assertEqual(window.width(), 760, page)
+                self.assertLessEqual(manager.width(), window.width() - window.sidebar.width())
+                self.assertTrue(window.grab().save(str(ROOT / f'.cache/launcher-embedded-{page}.png')))
+            window.resize(1440, 900)
             window.nav_buttons['overview'].click()
-            self.assertEqual(window.scroll.verticalScrollBar().value(), 0)
+            self.assertIs(window.pages.currentWidget(), window.scroll)
             # Late worker callbacks after closing must not touch a deleted window.
             self.assertTrue(window.grab().save(str(ROOT / '.cache/launcher-preview.png')))
         finally:
@@ -234,25 +288,30 @@ class IntegrationTest(unittest.TestCase):
     def test_manager_navigation_reuses_window(self):
         from PySide6.QtCore import QLockFile
         from amazing_overlay import manager_navigation
-        from amazing_overlay.ui import ManagerWindow
-        window = ManagerWindow()
+        from amazing_overlay.launcher import LauncherWindow
+        window = LauncherWindow()
         server = manager_navigation.ManagerNavigation(window)
-        lock = QLockFile(str(Path(self.temporary.name) / "manager.lock"))
+        lock = QLockFile(str(Path(self.temporary.name) / "launcher.lock"))
         self.assertTrue(lock.tryLock(0))
         try:
             self.assertTrue(server.listening)
-            for page, index in (("appearance", 3), ("ai", 2)):
+            for page, index in (("appearance", 3), ("ai", 2), ("sources", 0), ("overview", None)):
                 # A second real CLI process must forward to this existing
                 # manager and exit, rather than opening another GUI instance.
-                child = subprocess.Popen([sys.executable, "-m", "amazing_overlay", "manager", "--page", page],
+                command = ["launcher"] if page == "overview" else ["manager", "--page", page]
+                child = subprocess.Popen([sys.executable, "-m", "amazing_overlay", *command],
                                          cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                          env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name))
                 try:
                     self.events_until(lambda: child.poll() is not None)
                     output, error = child.communicate(timeout=3)
                     self.assertEqual(child.returncode, 0, error.decode(errors="replace"))
-                    self.assertEqual(window.tabs.currentIndex(), index)
-                    self.assertTrue(window.nav_buttons[index].isChecked())
+                    if index is None:
+                        self.assertIs(window.pages.currentWidget(), window.scroll)
+                        self.assertTrue(window.nav_buttons['overview'].isChecked())
+                    else:
+                        self.assertEqual(window.manager.tabs.currentIndex(), index)
+                        self.assertTrue(window.subnav_buttons[index].isChecked())
                 finally:
                     if child.poll() is None:
                         child.terminate()
@@ -263,7 +322,8 @@ class IntegrationTest(unittest.TestCase):
             lock.unlock()
             server.server.close()
             window.close()
-            self.events_until(lambda: not window.work)
+            if window.manager:
+                self.events_until(lambda: not window.manager.work)
 
     def test_native_dx9_host_and_same_rpc(self):
         binary = ROOT / "native" / "out-local" / "overlay_native_smoke.exe"

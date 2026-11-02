@@ -1,4 +1,4 @@
-"""Same-user navigation to the existing manager; no second manager window."""
+"""Same-user navigation to the launcher and its embedded management pages."""
 import json
 import time
 from PySide6.QtCore import QObject
@@ -6,11 +6,12 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from .settings import PIPE_NAME
 
 PAGES = ("sources", "update", "ai", "appearance", "diagnostics")
+DESTINATIONS = (*PAGES, "overview")
 SERVER_NAME = PIPE_NAME + "-manager-navigation"
 
 
 def send(page="sources"):
-    if page not in PAGES:
+    if page not in DESTINATIONS:
         raise ValueError("Неизвестный раздел управления")
     socket = QLocalSocket()
     socket.connectToServer(SERVER_NAME)
@@ -64,9 +65,14 @@ class ManagerNavigation(QObject):
                 try:
                     request = json.loads(data.split(b"\n", 1)[0])
                     page = request["page"]
-                    if page not in PAGES:
+                    if page not in DESTINATIONS:
                         raise ValueError("Unknown page")
-                    self.window.tabs.setCurrentIndex(PAGES.index(page))
+                    if page == "overview":
+                        self.window.section("overview")
+                    elif hasattr(self.window, "open_manager_page"):
+                        self.window.open_manager_page(page)
+                    else:
+                        self.window.tabs.setCurrentIndex(PAGES.index(page))
                     if self.window.isMinimized():
                         self.window.showNormal()
                     else:

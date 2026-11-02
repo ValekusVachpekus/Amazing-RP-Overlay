@@ -156,8 +156,10 @@ def table_text(table: dict) -> str:
     return "\n" + "\n".join(lines) + "\n"
 
 
-def document_html(doc: dict) -> str:
-    parts = ["<style>body{color:#e2e8f0;} table{border-collapse:collapse;} td,th{border:1px solid #64748b;padding:8px;} th{background:#253348;} h3{color:#93c5fd;} a{color:#7dd3fc;}</style>"]
+def document_html(doc: dict, *, stylesheet: str | None = None) -> str:
+    if stylesheet is None:
+        stylesheet = "body{color:#e2e8f0;} table{border-collapse:collapse;} td,th{border:1px solid #64748b;padding:8px;} th{background:#253348;} h3{color:#93c5fd;} a{color:#7dd3fc;}"
+    parts = ["<style>" + stylesheet + "</style>"]
     for post in doc["posts"]:
         parts.append(f'<a name="post-{post["post_id"]}"></a>')
         parts.extend(node_html(node) for node in post["blocks"])

@@ -1,14 +1,15 @@
 """Obsidian presentation for the launcher, scoped away from other Qt windows."""
 from functools import lru_cache
-from PySide6.QtCore import QByteArray, QSize, Qt
+from pathlib import Path
+from PySide6.QtCore import QByteArray, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QSizePolicy, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QLayout, QSizePolicy, QWidget
 
 
 STYLE = """
 QWidget {background:transparent;color:#d7d4e0;font-family:'Segoe UI';font-size:14px;}
-QMainWindow,QWidget#launcherRoot,QWidget#overview {background:#12131b;}
+QMainWindow,QDialog,QWidget#launcherRoot,QWidget#overview,QWidget#desktopRoot {background:#12131b;}
 QFrame#brandBar,QWidget#launcherSidebar {background:#181922;}
 QFrame#brandBar {border-bottom:1px solid #343240;}
 QWidget#launcherSidebar {border-right:1px solid #343240;}
@@ -44,14 +45,46 @@ QPushButton[role="quiet"] {background:#181922;}
 QPushButton[role="navigation"] {text-align:left;background:transparent;border:1px solid transparent;padding:11px 14px;}
 QPushButton[role="navigation"]:hover {background:#23232f;}
 QPushButton[role="navigation"]:checked {background:#30283f;border-color:#7751a3;color:#f3f1f7;}
+QPushButton[role="subnav"] {background:transparent;border:1px solid transparent;color:#9995aa;}
+QPushButton[role="subnav"]:hover {background:#23232f;color:#f3f1f7;}
+QPushButton[role="subnav"]:checked {background:#30283f;border-color:#7751a3;color:#f3f1f7;}
+QPushButton[role="danger"] {color:#eda4b2;}
+QPushButton[role="danger"]:disabled {color:#686475;}
+QLabel#status {color:#b4a1d1;padding:8px 0;}
+QLineEdit,QTextEdit,QPlainTextEdit,QTextBrowser,QComboBox,QSpinBox,QDoubleSpinBox {
+ background:#1c1d27;border:1px solid #343240;border-radius:8px;padding:9px;selection-background-color:#59416e;}
+QLineEdit:focus,QTextEdit:focus,QComboBox:focus,QSpinBox:focus,QDoubleSpinBox:focus {border-color:#9975c3;}
+QTableWidget {background:#181922;alternate-background-color:#1c1d27;border:1px solid #343240;border-radius:10px;padding:0;gridline-color:#343240;}
+QTableWidget::item {padding:8px;border:0;}
+QTableWidget::item:selected {background:#403052;color:#f3f1f7;}
+QHeaderView {background:#23232f;}
+QHeaderView::section {background:#23232f;color:#b6b0c3;border:0;border-right:1px solid #343240;border-bottom:1px solid #343240;padding:12px 10px;font-weight:600;}
+QTabWidget::pane {border:0;background:transparent;}
+QComboBox QAbstractItemView {background:#23232f;border:1px solid #7751a3;selection-background-color:#403052;}
+QCheckBox {spacing:8px;padding:5px 0;}
+QCheckBox::indicator {width:18px;height:18px;border-radius:4px;}
+QCheckBox::indicator:unchecked {background:#1c1d27;border:1px solid #6e667d;}
+QCheckBox::indicator:checked {background:#7751a3;border:1px solid #bda0ff;image:url("@ASSETS@/check.svg");}
+QComboBox {padding-right:32px;}
+QComboBox::drop-down {subcontrol-origin:padding;subcontrol-position:top right;width:28px;border:0;}
+QComboBox::down-arrow {image:url("@ASSETS@/down.svg");width:12px;height:12px;}
+QSpinBox,QDoubleSpinBox {padding-right:30px;}
+QSpinBox::up-button,QDoubleSpinBox::up-button {subcontrol-origin:border;subcontrol-position:top right;width:26px;border:0;}
+QSpinBox::down-button,QDoubleSpinBox::down-button {subcontrol-origin:border;subcontrol-position:bottom right;width:26px;border:0;}
+QSpinBox::up-arrow,QDoubleSpinBox::up-arrow {image:url("@ASSETS@/up.svg");width:12px;height:12px;}
+QSpinBox::down-arrow,QDoubleSpinBox::down-arrow {image:url("@ASSETS@/down.svg");width:12px;height:12px;}
 QScrollArea {background:transparent;border:0;}
+QScrollBar:horizontal {background:transparent;height:10px;margin:3px;}
+QScrollBar::handle:horizontal {background:#484252;border-radius:3px;min-width:32px;}
+QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal {width:0;}
+QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal {background:transparent;}
 QScrollBar:vertical {background:transparent;width:10px;margin:3px;}
 QScrollBar::handle:vertical {background:#484252;border-radius:3px;min-height:32px;}
 QScrollBar::handle:vertical:hover {background:#6f5b88;}
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;}
 QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical {background:transparent;}
 QToolTip {background:#23232f;border:1px solid #7751a3;color:#f3f1f7;padding:6px;}
-"""
+""".replace("@ASSETS@", (Path(__file__).parent / "assets").as_posix().replace('"', '\\"'))
 
 PATHS = {
     "home": '<path d="M4 10l6-5 6 5v7H4z"/>',
@@ -68,6 +101,15 @@ PATHS = {
     "stop": '<rect x="5" y="5" width="10" height="10" fill="currentColor" stroke="none"/>',
     "right": '<path d="M3 10h13M11 5l5 5-5 5"/>',
 }
+
+DOCUMENT_STYLE = """
+body{color:#d7d4e0;font-family:'Segoe UI';font-size:15px;}
+p{margin-top:6px;margin-bottom:10px;}
+h1,h2,h3,h4{color:#bda0ff;margin-top:18px;margin-bottom:10px;}
+table{border-collapse:collapse;}
+td,th{border:1px solid #51495e;padding:10px;}
+th{background:#30283f;color:#f3f1f7;} a{color:#bda0ff;}
+"""
 
 
 @lru_cache(maxsize=64)
@@ -185,3 +227,63 @@ def separator():
     frame.setObjectName("separator")
     frame.setFixedHeight(1)
     return frame
+
+
+class FlowLayout(QLayout):
+    """Compact toolbars wrap without imposing a window-wide minimum width."""
+    def __init__(self):
+        super().__init__()
+        self.items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(8)
+
+    def addItem(self, item):
+        self.items.append(item)
+
+    def addStretch(self, *_):
+        pass
+
+    def count(self):
+        return len(self.items)
+
+    def itemAt(self, index):
+        return self.items[index] if 0 <= index < len(self.items) else None
+
+    def takeAt(self, index):
+        return self.items.pop(index) if 0 <= index < len(self.items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations()
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self.arrange(QRect(0, 0, width, 0), False)
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self.items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self.arrange(rect, True)
+
+    def arrange(self, rect, apply):
+        x, y, height = rect.x(), rect.y(), 0
+        for item in self.items:
+            if item.isEmpty():
+                continue
+            size = item.sizeHint()
+            if x > rect.x() and x + size.width() > rect.x() + rect.width():
+                x, y, height = rect.x(), y + height + self.spacing(), 0
+            if apply:
+                item.setGeometry(QRect(x, y, size.width(), size.height()))
+            x += size.width() + self.spacing()
+            height = max(height, size.height())
+        return y + height - rect.y()

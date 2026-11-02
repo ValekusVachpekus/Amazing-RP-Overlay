@@ -25,6 +25,8 @@ class LauncherWindow(QMainWindow):
         self.generation = 0
         self.poll_revision = 0
         self.notes_root = None
+        self.manager = None
+        self.group_pages = {"manager": "sources", "settings": "appearance"}
         self.laws_root = str(DATA)
         self.build = ROOT / "scripts/build"
         self.developer_mode = self.build.is_dir() and not getattr(sys, "frozen", False)
@@ -49,7 +51,9 @@ class LauncherWindow(QMainWindow):
         self.content.setContentsMargins(40, 38, 40, 20)
         self.content.setSpacing(20)
         self.scroll.setWidget(self.overview)
-        body.addWidget(self.scroll, 1)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.scroll)
+        body.addWidget(self.pages, 1)
         title = QHBoxLayout()
         title.setSpacing(20)
         texts = QVBoxLayout()
@@ -137,18 +141,15 @@ class LauncherWindow(QMainWindow):
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
         items = [("overview", "Обзор", "home", lambda: self.section("overview")),
-                 ("manager", "Управление базой", "database", lambda: self.launch("manager")),
+                 ("manager", "Управление базой", "database", lambda: self.open_manager_page(self.group_pages["manager"])),
                  ("overlay", "Оверлей", "overlay", lambda: self.launch("overlay")),
-                 ("notes", "Заметки", "note", lambda: self.section("notes")),
                  ("settings", "Настройки", "settings", self.open_settings)]
-        if self.developer_mode:
-            items.append(("development", "Разработка", "code", lambda: self.section("development")))
         for name, text, glyph, callback in items:
             button = action(text, callback, nav, "navigation", icon(glyph))
             button.setIconSize(QSize(18, 18))
             button.setMinimumHeight(22)
             button.setAccessibleName(text)
-            if name in {"overview", "notes", "development"}:
+            if name in {"overview", "manager", "settings"}:
                 button.setCheckable(True)
                 self.nav_group.addButton(button)
             self.nav_buttons[name] = button
@@ -226,13 +227,49 @@ class LauncherWindow(QMainWindow):
         self.content.addWidget(self.backend_card)
 
     def section(self, name):
-        self.nav_buttons[name].setChecked(True)
-        if name == "overview":
-            self.scroll.verticalScrollBar().setValue(0)
-        else:
-            widget = self.notes_card if name == "notes" else self.developer_card
-            if widget is not None:
-                self.scroll.ensureWidgetVisible(widget, 0, 20)
+        if name != "overview":
+            raise ValueError("Неизвестный раздел лаунчера")
+        self.nav_buttons["overview"].setChecked(True)
+        self.pages.setCurrentWidget(self.scroll)
+
+    def open_manager_page(self, page="sources"):
+        from .manager_navigation import PAGES
+        if page not in PAGES:
+            raise ValueError("Неизвестный раздел управления")
+        if self.manager is None:
+            from .ui import ManagerWindow
+            self.manager_host = QWidget(self.pages)
+            self.manager_layout = QVBoxLayout(self.manager_host)
+            self.manager_layout.setContentsMargins(32, 28, 32, 16)
+            self.manager_layout.setSpacing(20)
+            self.subnav = QHBoxLayout()
+            self.subnav.setSpacing(8)
+            self.subnav_buttons = {}
+            self.subnav_group = QButtonGroup(self)
+            for index, title in ((0, "Источники"), (1, "Обновление"), (4, "Диагностика"), (3, "Оформление и клавиши"), (2, "ИИ / API")):
+                item = action(title, lambda checked=False, index=index: self.open_manager_page(PAGES[index]), self.subnav, "subnav")
+                item.setCheckable(True)
+                self.subnav_group.addButton(item)
+                self.subnav_buttons[index] = item
+            self.subnav.addStretch(1)
+            self.manager_layout.addLayout(self.subnav)
+            self.manager = ManagerWindow(parent=self.manager_host, embedded=True)
+            self.manager.settings_saved.connect(lambda _: self.check())
+            self.manager_layout.addWidget(self.manager, 1)
+            self.pages.addWidget(self.manager_host)
+            self.manager.tabs.currentChanged.connect(self.manager_page_changed)
+        self.manager.tabs.setCurrentIndex(PAGES.index(page))
+        self.manager_page_changed(PAGES.index(page))
+        self.pages.setCurrentWidget(self.manager_host)
+
+    def manager_page_changed(self, index):
+        from .manager_navigation import PAGES
+        group = "settings" if index in (2, 3) else "manager"
+        self.group_pages[group] = PAGES[index]
+        self.nav_buttons[group].setChecked(True)
+        for number, item in self.subnav_buttons.items():
+            item.setVisible((number in (2, 3)) == (group == "settings"))
+            item.setChecked(number == index)
 
     def update_buttons(self):
         ready = self.checked_once and not self.operation and not self.stopping
@@ -263,6 +300,9 @@ class LauncherWindow(QMainWindow):
         self.choose_button.setEnabled(not self.notes_pending)
 
     def launch(self, mode, page=None):
+        if mode == "manager":
+            self.open_manager_page(page or "sources")
+            return
         command = [mode] if getattr(sys, "frozen", False) else ["-m", "amazing_overlay", mode]
         if page:
             command.extend(["--page", page])
@@ -271,7 +311,7 @@ class LauncherWindow(QMainWindow):
             self.show_error("Не удалось запустить " + mode)
 
     def open_settings(self):
-        self.launch("manager", "appearance")
+        self.open_manager_page(self.group_pages["settings"])
 
     def check(self):
         if self.pending or self.operation or self.closed:
@@ -406,6 +446,8 @@ class LauncherWindow(QMainWindow):
                 self.update_buttons()
                 if error:
                     self.show_error(error)
+                elif self.manager is not None:
+                    self.manager.inputs["notes_dir"].setText(path)
                 self.check()
             background(lambda: (ensure_backend(), rpc("settings_save", {"notes_dir": path})), lambda _: finish(), lambda error: finish(error))
 
@@ -435,8 +477,13 @@ class LauncherWindow(QMainWindow):
                 self.content.setContentsMargins(24 if compact else 40, 28 if compact else 38, 24 if compact else 40, 20)
             if hasattr(self, "hero_row"):
                 self.hero_row.setDirection(QHBoxLayout.TopToBottom if event.size().width() < 1150 else QHBoxLayout.LeftToRight)
+            if hasattr(self, "manager_layout"):
+                margin = 20 if compact else 32
+                self.manager_layout.setContentsMargins(margin, 28, margin, 16)
 
     def closeEvent(self, event):
         self.closed = True
         self.timer.stop()
+        if self.manager is not None:
+            self.manager.close()
         super().closeEvent(event)

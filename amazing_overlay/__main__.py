@@ -36,25 +36,26 @@ def main():
     else:
         from PySide6.QtWidgets import QApplication
         app = QApplication(sys.argv)
-        lock = QLockFile(str(DATA / (args.mode + ".lock")))
+        desktop = args.mode in ("launcher", "manager")
+        lock = QLockFile(str(DATA / (("launcher" if desktop else args.mode) + ".lock")))
         lock.setStaleLockTime(0)
         if not lock.tryLock(0):
-            if args.mode == "manager":
+            if desktop:
                 from .manager_navigation import send
-                return 0 if send(args.page) else 1
+                return 0 if send(args.page if args.mode == "manager" else "overview") else 1
             return 0
         app.setApplicationName("Amazing Law Overlay 2")
-        from .ui import ManagerWindow, OverlayWindow, BrowserInstaller, STYLE
+        from .ui import OverlayWindow, BrowserInstaller, STYLE
         app.setStyleSheet(STYLE)
-        if args.mode == "launcher":
+        if desktop:
             from .launcher import LauncherWindow
+            from .manager_navigation import ManagerNavigation
             window = LauncherWindow()
-        else:
-            window = BrowserInstaller() if args.mode == "install-browser" else ManagerWindow() if args.mode == "manager" else OverlayWindow()
-        if args.mode == "manager":
-            from .manager_navigation import ManagerNavigation, PAGES
-            window.tabs.setCurrentIndex(PAGES.index(args.page))
+            if args.mode == "manager":
+                window.open_manager_page(args.page)
             window.navigation_server = ManagerNavigation(window)
+        else:
+            window = BrowserInstaller() if args.mode == "install-browser" else OverlayWindow()
         if args.mode != "overlay":
             window.show()
     return app.exec()
