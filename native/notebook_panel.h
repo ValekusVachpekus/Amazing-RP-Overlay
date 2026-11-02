@@ -29,7 +29,7 @@ class NotebookPanel {
     unsigned listGeneration=0;
     ULONGLONG editedAt=0, searchAt=0, stateAt=0;
     Json current=Json::object(), entries=Json::array(), pendingState=Json::object(), trashItems=Json::array(), recoveryItems=Json::array();
-    std::string root, selected, status="Загрузка блокнота…", lastQuery, dialogKind, dialogSource;
+    std::string root, selected, status="Загрузка блокнота…", lastQuery, dialogKind, dialogSource, dialogRoot, externalCopyText;
     char listQuery[256]{}, findQuery[256]{}, name[1024]{};
     std::set<std::string> expanded;
     float treeWidth=260, scroll=0;
@@ -105,7 +105,7 @@ class NotebookPanel {
         });
     }
     void Dialog(std::string kind, std::string initial="", std::string source="") {
-        dialogKind=kind; dialogSource=source;
+        dialogKind=kind; dialogSource=source; dialogRoot=root;
         std::fill(std::begin(name),std::end(name),0);
         memcpy(name,initial.data(),std::min(initial.size(),sizeof(name)-1));
         dialogRequested=true;
@@ -121,14 +121,48 @@ class NotebookPanel {
             if (directory!=parent && !listQuery[0]) continue;
             ImGui::PushID(path.c_str());
             auto label=listQuery[0] ? path : path.substr(at==std::string::npos ? 0 : at+1);
-            if (item.value("folder",false)) {
-                ImGui::SetNextItemOpen(expanded.count(path)!=0,ImGuiCond_Once);
-                bool open=ImGui::TreeNodeEx("folder",ImGuiTreeNodeFlags_OpenOnArrow|ImGuiTreeNodeFlags_SpanAvailWidth,"%s",label.c_str());
-                if (ImGui::IsItemClicked()) selected=path;
-                if (open) { expanded.insert(path); Tree(path); ImGui::TreePop(); } else expanded.erase(path);
-            } else {
-                if(ui::Row("note",label,current.value("path","")==path)) {selected=path;Guard([this,path]{Load(path);});}
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s",path.c_str());
+            const bool folder=item.value("folder",false);
+            const float y=ImGui::GetCursorPosY(),width=ImGui::GetContentRegionAvail().x;
+            const float menuWidth=ui::Px(32),gap=ImGui::GetStyle().ItemSpacing.x;
+            if(ui::Row("note",label,selected==path,folder?ui::Icon::Folder:ui::Icon::Note,std::max(ui::Px(70),width-menuWidth-gap))) {
+                selected=path;
+                if(folder){if(!expanded.erase(path))expanded.insert(path);}
+                else Guard([this,path]{Load(path);});
+            }
+            const float rowBottom=ImGui::GetCursorPosY();
+            ImGui::SameLine();ImGui::SetCursorPosY(y+ui::Px(1));
+            if(ui::Button("actions","Действия с файлом или папкой",ui::Icon::More,menuWidth,false,true)){
+                selected=path;ImGui::OpenPopup("note-actions");
+            }
+            const ImVec2 menuAnchor(ImGui::GetItemRectMin().x,ImGui::GetItemRectMax().y+ui::Px(4));
+            if(previewFileActions && !folder){selected=path;previewFileActions=false;ImGui::OpenPopup("note-actions");}
+            if(ui::Dropdown("note-actions",menuAnchor)){
+                ui::Text(label,.9f,true,ImGuiCol_Text,ui::Px(290));ImGui::Separator();
+                if(folder){
+                    if(ImGui::MenuItem("Новая заметка"))FileDialog("create",path+"/Новая заметка.txt");
+                    if(ImGui::MenuItem("Новая папка"))FileDialog("folder",path+"/Новая папка");
+                }else{
+                    const bool isCurrent=current.value("path","")==path;
+                    if(ImGui::MenuItem(isCurrent?"Перечитать с диска":"Открыть")){ImGui::CloseCurrentPopup();Guard([this,path]{Load(path);});}
+                    if(ImGui::MenuItem("Сохранить копию")){
+                        ImGui::CloseCurrentPopup();
+                        const auto initial=(at==std::string::npos?"":path.substr(0,at+1))+"Копия.txt";
+                        if(isCurrent)Dialog("copy",initial);
+                        else {const auto expectedRoot=root;Call("notes_read",{{"path",path}},[this,initial,expectedRoot](const Json& value){
+                            if(root!=expectedRoot){status="Папка заметок изменилась. Повторите действие";return;}
+                            externalCopyText=value.at("text").get<std::string>();Dialog("copy-file",initial);
+                        });}
+                    }
+                }
+                if(ImGui::MenuItem("Переименовать / переместить"))FileDialog("move",path,path);
+                ImGui::Separator();
+                if(ImGui::MenuItem("В корзину"))FileDialog("delete",path,path);
+                ImGui::EndPopup();
+            }
+            ImGui::SetCursorPosY(std::max(rowBottom,y+ui::Px(48)));
+            if(folder && expanded.count(path) && !listQuery[0]){
+                const float indent=std::min(ui::Px(16),std::max(0.f,width-ui::Px(150)));
+                if(indent)ImGui::Indent(indent);Tree(path);if(indent)ImGui::Unindent(indent);
             }
             ImGui::PopID();
         }
@@ -204,15 +238,16 @@ public:
     bool Editing() const {return open && editor.focused;}
     Json conflict=Json::object();
     bool newRequested=false;
-    bool previewFiles=false;
+    bool previewFiles=false,previewFileActions=false;
     void PreviewFiles(){previewFiles=true;}
+    void PreviewFileActions(){previewFileActions=true;}
     void Draw(bool interactive, const std::function<void(const std::string&)>& attach, ImFont* font=nullptr) {
         if (!open) return;
         if(font)ImGui::PushFont(font);
         struct FontScope{bool pushed;~FontScope(){if(pushed)ImGui::PopFont();}} fontScope{font!=nullptr};
         const float scale=ui::Scale();
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
-        ImGui::BeginChild("notebook",ImVec2(0,-28*scale),ImGuiChildFlags_None);ImGui::PopStyleColor();
+        ImGui::BeginChild("notebook",ImVec2(0,0),ImGuiChildFlags_None);ImGui::PopStyleColor();
         if(newRequested){newRequested=false;Dialog("create",Parent()+"Новая заметка.txt");}
         bool filesRequested=previewFiles;previewFiles=false;
         const float available=ImGui::GetContentRegionAvail().x;
@@ -220,14 +255,17 @@ public:
             treeWidth=std::clamp(treeWidth,160*scale,std::max(160*scale,available-340*scale));
             ImGui::BeginChild("notes-sidebar",ImVec2(treeWidth,0),ImGuiChildFlags_Borders);
             ui::Text("Мои заметки",1.2f,true);ImGui::Spacing();
-            if(ui::Button("new-note","Новая заметка",ui::Icon::Plus,40*scale,true,true))Dialog("create",Parent()+"Новая заметка.txt");
-            ImGui::SameLine();if(ui::Button("files","Файлы",ui::Icon::Files,ImGui::GetContentRegionAvail().x))filesRequested=true;
+            const float menuWidth=36*scale;
+            const float newWidth=std::max(40*scale,ImGui::GetContentRegionAvail().x-menuWidth-ImGui::GetStyle().ItemSpacing.x);
+            const bool compactNew=newWidth<ImGui::CalcTextSize("Новая заметка").x+54*scale;
+            if(ui::Button("new-note","Новая заметка",ui::Icon::Plus,newWidth,false,compactNew))Dialog("create",Parent()+"Новая заметка.txt");
+            ImGui::SameLine();if(ui::Button("files","Общие действия",ui::Icon::More,menuWidth,false,true))filesRequested=true;
+            if(filesRequested){ImGui::OpenPopup("notes-files");filesRequested=false;}
+            GeneralMenu(ImVec2(ImGui::GetItemRectMin().x,ImGui::GetItemRectMax().y+ui::Px(4)));
             ui::Divider();ImGui::SetNextItemWidth(-1);
             if(ImGui::InputTextWithHint("##note-query","Имя или текст…",listQuery,sizeof(listQuery)))searchAt=GetTickCount64();
             if(lastQuery!=listQuery && GetTickCount64()-searchAt>=150){lastQuery=listQuery;Refresh();}
-            ImGui::BeginChild("notes-tree",ImVec2(0,-100*scale));Tree();ImGui::EndChild();
-            if(ui::Button("trash","Корзина",ui::Icon::Trash,ImGui::GetContentRegionAvail().x))Call("notes_trash",Json::object(),[this](const Json& result){trashItems=result;showTrash=true;});
-            if(ui::Button("drafts","Черновики",ui::Icon::Note,ImGui::GetContentRegionAvail().x))Recoveries();
+            ImGui::BeginChild("notes-tree",ImVec2(0,0));Tree();ImGui::EndChild();
             ImGui::EndChild();ImGui::SameLine();ImGui::InvisibleButton("notes-split",ImVec2(5*scale,ImGui::GetContentRegionAvail().y));
             if(interactive && ImGui::IsItemActive()){layoutTouched=true;treeWidth+=ImGui::GetIO().MouseDelta.x;}
             if(ImGui::IsItemHovered())ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -243,7 +281,11 @@ public:
         ui::Text(path.empty()?"Открой или создай заметку":current.value("encoding","UTF-8"),.8f,false,ImGuiCol_TextDisabled);
         ImGui::EndChild();ImGui::SameLine();
         if(ui::Button("beside",beside?"Развернуть":"Рядом с законом",ui::Icon::Book,toggleWidth,beside,compact))SetBeside(!beside);
-        if(beside && ui::Button("files-beside","Файлы",ui::Icon::Files))filesRequested=true;
+        if(beside){
+            if(ui::Button("files-beside","Файлы и папки",ui::Icon::More,40*scale,false,true))filesRequested=true;
+            if(filesRequested){ImGui::OpenPopup("notes-files");filesRequested=false;}
+            GeneralMenu(ImVec2(ImGui::GetItemRectMin().x,ImGui::GetItemRectMax().y+ui::Px(4)));
+        }
         ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(),headingY+72*scale));
         ui::Divider();
         if (interactive && editor.focused && ImGui::GetIO().KeyCtrl) {
@@ -275,31 +317,12 @@ public:
         ImGui::EndChild();ImGui::EndDisabled();
         ui::Divider();
         if(ui::Button("save-note","Сохранить",ui::Icon::Check))Save();ImGui::SameLine();
-        if(ui::Button("attach-note","В чат",ui::Icon::Chat,0,true) && !current.empty()){
+        if(ui::Button("attach-note","В чат",ui::Icon::Chat) && !current.empty()){
             auto text=editor.model.Selected();if(text.empty())text=editor.model.Utf8();
             text="Заметка «"+current.value("path","")+"»:\n"+text;
             if(Decode(text).size()>12000)status="Для чата выделите фрагмент до 12000 символов. Текст не отправлен";else attach(text);
         }
         ImGui::EndChild();
-        if(filesRequested)ImGui::OpenPopup("notes-files");
-        ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x*.5f,ImGui::GetIO().DisplaySize.y*.5f),ImGuiCond_Appearing,ImVec2(.5f,.5f));
-        ImGui::SetNextWindowSizeConstraints(ImVec2(200,120),ImVec2(ImGui::GetIO().DisplaySize.x-40,ImGui::GetIO().DisplaySize.y-40));
-        if (ImGui::BeginPopupModal("notes-files",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoTitleBar)) {
-            if(ImGui::IsKeyPressed(ImGuiKey_Escape))ImGui::CloseCurrentPopup();
-            ui::Text("Файлы и папки",1.4f,true);ui::Text("TXT-заметки в папке Notes",.85f,false,ImGuiCol_TextDisabled);ui::Divider();
-            if (FileMenuItem("Новая заметка", "Ctrl+N")) FileDialog("create",Parent()+"Новая заметка.txt");
-            if (FileMenuItem("Новая папка")) FileDialog("folder",Parent()+"Новая папка");
-            if (FileMenuItem("Переименовать / переместить",nullptr,false,!selected.empty())) FileDialog("move",selected,selected);
-            if (FileMenuItem("Сохранить копию",nullptr,false,!current.empty())) FileDialog("copy",Parent()+"Копия.txt");
-            if (FileMenuItem("Перечитать с диска",nullptr,false,!current.empty())) {auto path=current.value("path","");Guard([this,path]{Load(path);});}
-            if (FileMenuItem("В корзину",nullptr,false,!selected.empty())) FileDialog("delete",selected,selected);
-            if (FileMenuItem("Корзина / восстановление")){ImGui::CloseCurrentPopup();Call("notes_trash",Json::object(),[this](const Json& result){trashItems=result;showTrash=true;});}
-            if(FileMenuItem("Черновики / восстановление")){ImGui::CloseCurrentPopup();Recoveries();}
-            if (FileMenuItem("Обновить список")) Refresh();
-            ui::Divider();if(ui::Button("close-files","Закрыть",ui::Icon::Close))ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
-
         // Popups are scoped to this panel, independent of the tree/editor child IDs.
         if(dialogRequested){ImGui::OpenPopup("Файл блокнота");dialogRequested=false;}
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x*.5f,ImGui::GetIO().DisplaySize.y*.5f),ImGuiCond_Appearing,ImVec2(.5f,.5f));
@@ -312,8 +335,9 @@ public:
             ui::Text("Существующие файлы не перезаписываются",.8f,false,ImGuiCol_TextDisabled);ui::Divider();
             if(ui::Button("confirm-file",dialogKind=="delete"?"В корзину":"Подтвердить",ui::Icon::Check,0,true)){
                 std::string destination=name, kind=dialogKind, source=dialogSource;
-                auto text=kind=="copy" ? editor.model.Utf8() : kind=="recover" ? recoveryText : "";
-                auto action=[this,destination,kind,source,text]{
+                auto text=kind=="copy" ? editor.model.Utf8() : kind=="copy-file" ? externalCopyText : kind=="recover" ? recoveryText : "";
+                auto action=[this,destination,kind,source,text,expectedRoot=dialogRoot]{
+                    if(root!=expectedRoot){status="Папка заметок изменилась. Повторите действие";return;}
                     std::string method=kind=="move" ? "notes_move" : kind=="delete" ? "notes_delete" : kind=="restore" ? "notes_restore" : "notes_create";
                     Json params=kind=="move" ? Json{{"path",source},{"destination",destination}} : kind=="delete" ? Json{{"path",source}} : kind=="restore" ? Json{{"id",source},{"destination",destination}} : Json{{"path",destination},{"folder",kind=="folder"},{"text",text}};
                     loading=true;
@@ -324,10 +348,11 @@ public:
                         if(kind=="delete" && affected){current=Json::object();editor.model.Load("");dirty=false;}
                         else if(kind=="move" && affected){current["path"]=destination+old.substr(source.size());selected=current.value("path","");}
                         else if(kind=="create" || kind=="copy" || kind=="recover"){dirty=false;conflict=Json::object();Load(destination);}
+                        if(kind=="copy-file")status="Копия сохранена";
                         Refresh();
                     }))loading=false;
                 };
-                if(kind=="copy") action(); else Guard(action);
+                if(kind=="copy" || kind=="copy-file") action(); else Guard(action);
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();if(ui::Button("cancel-file","Отмена",ui::Icon::Close))ImGui::CloseCurrentPopup();
@@ -353,11 +378,25 @@ public:
         ImGui::EndChild();
     }
 private:
-    bool FileMenuItem(const char* title,const char* shortcut=nullptr,bool selectedItem=false,bool enabled=true){
-        (void)shortcut;(void)selectedItem;
-        ImGui::BeginDisabled(!enabled);
-        const float width=std::min(ui::Px(420),ImGui::GetIO().DisplaySize.x-ui::Px(80));
-        bool clicked=ui::Button(title,title,ui::Icon::Files,width);ImGui::EndDisabled();return clicked;
+    void GeneralMenu(ImVec2 anchor){
+        if(!ui::Dropdown("notes-files",anchor))return;
+        if(ImGui::MenuItem("Новая заметка","Ctrl+N"))FileDialog("create",Parent()+"Новая заметка.txt");
+        if(ImGui::MenuItem("Новая папка"))FileDialog("folder",Parent()+"Новая папка");
+        ImGui::Separator();
+        if(ImGui::MenuItem("Обновить список"))Refresh();
+        if(ImGui::MenuItem("Корзина / восстановление"))Call("notes_trash",Json::object(),[this](const Json& result){trashItems=result;showTrash=true;});
+        if(ImGui::MenuItem("Черновики / восстановление"))Recoveries();
+        // In beside mode the file tree is hidden; keep current-note actions
+        // reachable without confusing a selected folder with the open editor.
+        const auto path=current.value("path","");
+        if(beside && ImGui::BeginMenu("Текущая заметка",!path.empty())){
+            if(ImGui::MenuItem("Переименовать / переместить"))FileDialog("move",path,path);
+            if(ImGui::MenuItem("Сохранить копию",nullptr,false,!current.empty()))FileDialog("copy",Parent()+"Копия.txt");
+            if(ImGui::MenuItem("Перечитать с диска",nullptr,false,!current.empty())){auto path=current.value("path","");Guard([this,path]{Load(path);});}
+            if(ImGui::MenuItem("В корзину"))FileDialog("delete",path,path);
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
     }
     void FileDialog(std::string kind,std::string initial="",std::string source="") {
         ImGui::CloseCurrentPopup();Dialog(kind,initial,source);

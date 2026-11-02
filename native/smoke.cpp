@@ -67,6 +67,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     auto noteFont=reinterpret_cast<NoteFont>(GetProcAddress(library,"AmazingOverlayNoteFontForTest"));
     auto design=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayDesignForTest"));
     auto layout=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayLayoutForTest"));
+    auto uiState=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayUiForTest"));
     bool previewedDesign=false;
     unsigned tabFrames=0;
     bool previewedNotebook=false;
@@ -128,6 +129,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
                     if(scenario>=5 && scenario<=7 && (layout()&15u)!=2u)return 20;
                     if(scenario==6 && (layout()>>8)!=2u)return 21;
                     if(scenario==7 && (layout()>>8)!=1u)return 22;
+                    if(!uiState || !(uiState()&(1u<<24)))return 23;
+                    const auto expectedRows=wcsstr(command,L"--expect-law-rows=");
+                    if(expectedRows && (scenario==0 || scenario==13)){
+                        const auto ui=uiState();
+                        // The fixture pins the selected document. It must occur
+                        // once, regardless of any other imported documents.
+                        const auto expected=scenario==13?1u:static_cast<unsigned>(_wtoi(expectedRows+18));
+                        if((ui&255u)!=expected || ((ui>>8)&255u)!=1u)return 24;
+                        if(((ui>>16)&3u)!=(scenario==13?2u:1u))return 25;
+                    }
                 }
                 if (!visibility) return 6;
                 for (int cycle = 0; cycle < 100; ++cycle) {

@@ -12,3 +12,10 @@ struct TabNavigation {
         return changed;
     }
 };
+
+// A visible sidebar has exactly one active mode. Clicking that mode again
+// collapses it; selecting the other mode always opens it.
+inline void SelectLibrary(bool requestedFavorites, bool& visible, bool& favoritesOnly) {
+    visible = !visible || favoritesOnly != requestedFavorites;
+    favoritesOnly = requestedFavorites;
+}

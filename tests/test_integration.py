@@ -361,11 +361,12 @@ class IntegrationTest(unittest.TestCase):
         rpc("state_set", {"key": "notebook-native", "value": {"path": "Пример.txt", "beside": False}})
         output = ROOT / ".cache/obsidian-visual"
         output.mkdir(exist_ok=True)
+        document_count = len({item["id"] for item in rpc("documents")})
         try:
-            for scenario in range(12):
+            for scenario in range(14):
                 with self.subTest(scenario=scenario):
                     capture = output / f"{scenario:02}.bmp"
-                    result = subprocess.run([str(binary), "--self-test", f"--design={scenario}"],
+                    result = subprocess.run([str(binary), "--self-test", f"--design={scenario}", f"--expect-law-rows={document_count}"],
                                             cwd=binary.parent, timeout=25, capture_output=True,
                                             env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name,
                                                      AMAZING_OVERLAY_CAPTURE=str(capture)))

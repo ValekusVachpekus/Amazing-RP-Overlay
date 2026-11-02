@@ -1,4 +1,5 @@
 #include "desktop_ui.h"
+#include "navigation.h"
 #include <iostream>
 
 int main(){
@@ -16,7 +17,7 @@ int main(){
             ImGui::EndDisabled();ui::Slider("slider",&slider,14,26,"%.0f px");
             ui::Button("small","Long label clipped inside its button",ui::Icon::Plus,ui::Px(50));
             ui::Row("doc","A long document title that wraps across lines",true);
-            for(int icon=0;icon<=static_cast<int>(ui::Icon::Trash);++icon){
+            for(int icon=0;icon<=static_cast<int>(ui::Icon::Folder);++icon){
                 ImGui::PushID(icon);ui::Button("icon","Icon",static_cast<ui::Icon>(icon),0,false,true);ImGui::PopID();
             }
             ImGui::End();ImGui::Render();
@@ -26,6 +27,27 @@ int main(){
         io.AddMouseButtonEvent(0,false);if(!frame() || !enabled)return 1;
         io.AddMouseButtonEvent(0,true);frame(true);io.AddMouseButtonEvent(0,false);frame(true);
         if(!enabled || slider<14 || slider>26)return 2;
+        bool visible=true,favorites=false;ImVec2 libraryCenter,favoritesCenter;
+        auto libraryFrame=[&]{
+            ImGui::NewFrame();ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(ImVec2(900,700));
+            ImGui::Begin("library",nullptr,ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove);
+            if(ui::Button("library","Library",ui::Icon::Book,ui::Px(40),visible && !favorites,true))SelectLibrary(false,visible,favorites);
+            auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();libraryCenter=ImVec2((a.x+b.x)/2,(a.y+b.y)/2);
+            ImGui::SameLine();
+            if(ui::Button("favorites","Favorites",ui::Icon::Star,ui::Px(40),visible && favorites,true))SelectLibrary(true,visible,favorites);
+            a=ImGui::GetItemRectMin();b=ImGui::GetItemRectMax();favoritesCenter=ImVec2((a.x+b.x)/2,(a.y+b.y)/2);
+            ImGui::End();ImGui::Render();
+        };
+        libraryFrame();libraryFrame();
+        auto click=[&](ImVec2 at){io.AddMousePosEvent(at.x,at.y);libraryFrame();io.AddMouseButtonEvent(0,true);libraryFrame();io.AddMouseButtonEvent(0,false);libraryFrame();};
+        for(int cycle=0;cycle<100;++cycle){
+            click(favoritesCenter);if(!visible || !favorites)return 3;
+            click(favoritesCenter);if(visible)return 4;
+            click(libraryCenter);if(!visible || favorites)return 5;
+            click(libraryCenter);if(visible)return 6;
+            click(favoritesCenter);if(!visible || !favorites)return 7;
+            click(libraryCenter);if(!visible || favorites)return 8;
+        }
     }
-    ImGui::DestroyContext();std::cout<<"Native components: PASS (100/125/150%, pointer toggle, disabled state, sliders, icons, wrapped rows)\n";
+    ImGui::DestroyContext();std::cout<<"Native components: PASS (100/125/150%, pointer toggle, disabled state, sliders, icons, wrapped rows, 100 library/favorites cycles)\n";
 }

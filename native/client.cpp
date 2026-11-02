@@ -70,6 +70,9 @@ constexpr wchar_t NativeInputOwner[]=L"AmazingLawOverlay.NativeInputOwner.v1";
 constexpr UINT OpenNotebookMessage=WM_APP+0x416;
 std::atomic<bool> openNotebookRequested{false};
 std::atomic<int> designPreview{-1}; // Standalone D3D9 host only; never injects.
+// Counts and bounds from the actual rendered frame, for the standalone host.
+unsigned visibleLawRows=0,selectedLawRows=0,libraryButtonState=0;
+float contentTop=0,contentBottom=0,windowBottom=0,hintBottom=0;
 notebook::NotebookPanel& Notebook() { static auto* value=new notebook::NotebookPanel();return *value; }
 std::atomic<bool> flushNotebook{false};
 std::array<ImFont*, 13> uiFonts{};
@@ -398,12 +401,14 @@ void Draw() {
     bool focused = GetForegroundWindow() == gameWindow;
     const int preview=designPreview.exchange(-1);
     if(preview>=0){
-        SelectTab(preview>=5 && preview<=7 ? MainTab::Settings : preview==3 || preview==4 || preview==8 || preview==9 ? MainTab::Notebook : MainTab::Laws);
+        SelectTab(preview>=5 && preview<=7 ? MainTab::Settings : preview==3 || preview==4 || preview==8 || preview==9 || preview==12 ? MainTab::Notebook : MainTab::Laws);
         showList=true;showChat=preview==2;notebook.SetBeside(preview==4);
         if(preview==1){strcpy_s(search,"таблица");searchChanged=GetTickCount64()-200;}
         if(preview==10)showList=false;
         if(preview>=5 && preview<=7)settingsPanel.section=preview==5?0:preview==6?2:1;
         if(preview==8)notebook.PreviewFiles();
+        if(preview==12)notebook.PreviewFileActions();
+        if(preview==13)favoritesOnly=true;
         if(preview==9)notebook.NewNote();
         if(preview==11){SelectTab(MainTab::Settings);settingsPanel.draft.light=true;SelectTab(MainTab::Laws);}
     }
@@ -489,9 +494,9 @@ void Draw() {
     const float headerHeight=(compactHeader?104.f:52.f)*scale;
     auto* draw=ImGui::GetWindowDrawList();
     draw->AddRectFilled(ImVec2(position.x+1,position.y+1),ImVec2(position.x+size.x-1,header.y+headerHeight),ui::Color(ImGuiCol_TitleBg),ui::Px(12),ImDrawFlags_RoundCornersTop);
-    ui::Text("AMAZING / ЗАКОНЫ",1.05f,true);
-    ui::Text("Автор: Vladislav_Shetkov",.76f,false,ImGuiCol_TextDisabled);
-    const float navX=compactHeader?16*scale:std::clamp(headerWidth*.26f,190*scale,280*scale);
+    ui::Text("AMAZING / ЗАКОНЫ",20.f/17,true);
+    ui::Text("Автор: Vladislav_Shetkov",14.f/17,false,ImGuiCol_TextDisabled);
+    const float navX=compactHeader?16*scale:std::clamp(headerWidth*.26f,230*scale,280*scale);
     ImGui::SetCursorPos(ImVec2(navX,headerY+(compactHeader?52*scale:0)));
     for(auto tab:{MainTab::Laws,MainTab::Notebook,MainTab::Settings}){
         if(tab!=MainTab::Laws)ImGui::SameLine();
@@ -515,10 +520,17 @@ void Draw() {
     ImGui::SetCursorPosY(headerY+headerHeight+10*scale);ImGui::Separator();ImGui::Spacing();
     const auto inputLabel=overlay_input::BindingLabel(input),toggleLabel=overlay_input::BindingLabel(toggle);
     const std::string modeHint=mode==Mode::Input?"Ввод · "+inputLabel+" / Esc — просмотр":"Просмотр · "+inputLabel+" — ввод · "+toggleLabel+" — скрыть";
-    const float footer=28*scale;
+    // Keep the input hint above every page; a footer previously overflowed the
+    // root window and clipped a second line of status at the bottom edge.
+    ui::Status(modeHint,document && status==document->value("title","")?"":status);
+    hintBottom=ImGui::GetItemRectMax().y;
+    ImGui::Spacing();
+    visibleLawRows=selectedLawRows=libraryButtonState=0;
+    contentTop=ImGui::GetCursorScreenPos().y;
+    windowBottom=position.y+size.y;
     if (navigation.active==MainTab::Settings) {
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
-        ImGui::BeginChild("settings-page",ImVec2(0,-footer));ImGui::PopStyleColor();
+        ImGui::BeginChild("settings-page",ImVec2(0,0));ImGui::PopStyleColor();
         const auto action = settingsPanel.Draw(settingsPending, testing, settingsMessage);
         if (action == SettingsPanel::Action::Save || action == SettingsPanel::Action::Test) {
             const Json values = settingsPanel.Values();
@@ -537,7 +549,8 @@ void Draw() {
         } else if (action == SettingsPanel::Action::CancelTest) {
             Enqueue([] { std::string job; { std::lock_guard<std::mutex> lock(S().mutex); job = S().testJob; } if (!job.empty()) Rpc("job_cancel", {{"id", job}}); });
         }
-        ImGui::EndChild();ui::Text(modeHint,.76f,false,ImGuiCol_TextDisabled);
+        ImGui::EndChild();
+        contentBottom=ImGui::GetItemRectMax().y;
         if(!settingsPanel.open)SelectTab(navigation.content);
         ImGui::End();
         return;
@@ -549,31 +562,36 @@ void Draw() {
     };
     if(notebook.open && !notebook.beside) {
         notebook.Draw(mode==Mode::Input,attachNote,uiFonts[appearance.font-14]);
-        ui::Status(modeHint,status);
+        contentBottom=ImGui::GetItemRectMax().y;
         ImGui::End();return;
     }
     // Search and reader controls remain local; no browser or parser is opened.
     if(navigation.active==MainTab::Laws && mode==Mode::Input && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F))focusSearch=true;
-    const bool lawsWorkspace=navigation.active==MainTab::Laws;
-    if(lawsWorkspace){
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
-        ImGui::BeginChild("law-rail",ImVec2(48*scale,-footer));ImGui::PopStyleColor();
-        if(ui::Button("library","Библиотека",ui::Icon::Book,40*scale,showList,true)){showList=!showList;savePanels();}
-        ImGui::Spacing();if(ui::Button("favorites","Избранное",ui::Icon::Star,40*scale,favoritesOnly,true)){favoritesOnly=!favoritesOnly;showList=true;savePanels();}
-        ImGui::EndChild();ImGui::SameLine();ImGui::PushStyleColor(ImGuiCol_ChildBg,ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
-        ImGui::BeginChild("law-workspace",ImVec2(0,-footer));ImGui::PopStyleColor();
-    }
-    const float bodyBottom=lawsWorkspace?0:footer;
+    const float bodyBottom=0;
     const float toolbar=ImGui::GetCursorPosY(), fullWidth=ImGui::GetContentRegionAvail().x;
-    ImGui::SetNextItemWidth(std::max(100*scale,fullWidth-282*scale));
+    const bool libraryControls=navigation.active==MainTab::Laws;
+    if(libraryControls){
+        const bool selectLibrary=ui::Button("library","Библиотека",ui::Icon::Book,40*scale,showList && !favoritesOnly,true);
+        ImGui::SameLine();const bool selectFavorites=ui::Button("favorites","Избранное",ui::Icon::Star,40*scale,showList && favoritesOnly,true);
+        if(selectLibrary || selectFavorites){SelectLibrary(selectFavorites,showList,favoritesOnly);savePanels();}
+        libraryButtonState=showList?(favoritesOnly?2u:1u):0u;
+        ImGui::SameLine();
+    }
+    char count[48];std::snprintf(count,sizeof(count),"%d/%d",readerSearch.total?readerSearch.active+1:0,readerSearch.total);
+    const float counterWidth=std::max(32*scale,ImGui::CalcTextSize(count).x);
+    const float controls=(libraryControls?228:148)*scale+counterWidth+(libraryControls?7:5)*ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextItemWidth(std::max(100*scale,fullWidth-controls));
     if(focusSearch){ImGui::SetKeyboardFocusHere();focusSearch=false;}
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(ImGui::GetStyle().FramePadding.x,(40*scale-ImGui::GetFontSize())*.5f));
     if(ImGui::InputTextWithHint("##search","Найти в законах…",search,sizeof(search)))searchChanged=GetTickCount64();
     const bool searchFocused=ImGui::IsItemActive();
+    ImGui::PopStyleVar();
     if(readerSearch.query!=search){readerSearch.query=search;readerSearch.active=0;readerSearch.total=0;readerSearch.jump=true;}
     auto stepMatch=[&](int delta){if(readerSearch.total)readerSearch.active=(readerSearch.active+delta+readerSearch.total)%readerSearch.total;readerSearch.jump=true;};
     ImGui::SameLine();if(ui::Button("prev-match","Предыдущее совпадение · Shift+F3",ui::Icon::Left,36*scale,false,true))stepMatch(-1);
     ImGui::SameLine();if(ui::Button("next-match","Следующее совпадение · F3",ui::Icon::Right,36*scale,false,true))stepMatch(1);
-    ImGui::SameLine();ImGui::TextDisabled("%d/%d",readerSearch.total?readerSearch.active+1:0,readerSearch.total);
+    ImGui::SameLine();ImGui::BeginChild("match-count",ImVec2(counterWidth,40*scale),ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::SetCursorPosY((40*scale-ImGui::GetFontSize())*.5f);ImGui::TextDisabled("%s",count);ImGui::EndChild();
     ImGui::SameLine();if(ui::Button("clear-search","Сбросить поиск",ui::Icon::Close,36*scale,false,true)){search[0]=0;searchChanged=GetTickCount64();}
     ImGui::SameLine();if(ui::Button("toggle-chat","ИИ-помощник",ui::Icon::Chat,40*scale,showChat,true)){showChat=!showChat;savePanels();}
     ImGui::SetCursorPosY(toolbar+52*scale);
@@ -606,14 +624,16 @@ void Draw() {
             const auto id=item.value(searching?"doc_id":"id","");
             if(std::find(shown.begin(),shown.end(),id)!=shown.end() || (favoritesOnly && !favorites.count(id)))return;
             shown.push_back(id);auto title=LawDisplayTitle(item.value("title",""));
-            if(ui::Row((id+(pinned?"-pinned":"")).c_str(),title,document && document->value("id","")==id,pinned?ui::Icon::Star:ui::Icon::Note))LoadDocument(id);
+            const bool selected=document && document->value("id","")==id;
+            ++visibleLawRows;if(selected)++selectedLawRows;
+            if(ui::Row(id.c_str(),title,selected,pinned?ui::Icon::Star:ui::Icon::Note))LoadDocument(id);
             if(searching && item.contains("snippet"))ui::Text(item.value("snippet",""),.78f,false,ImGuiCol_TextDisabled);
         };
         const auto& listing=searching?hits:documents;
         if(!searching && !favoritesOnly && !favorites.empty()){
             ui::Text("ЗАКРЕПЛЁННЫЕ",.72f,true,ImGuiCol_CheckMark);
             for(const auto& item:listing)if(favorites.count(item.value("id","")))lawRow(item,true);
-            shown.clear();ImGui::Spacing();ui::Text("ВСЕ ДОКУМЕНТЫ",.72f,true,ImGuiCol_TextDisabled);
+            if(shown.size()<listing.size()){ImGui::Spacing();ui::Text("ОСТАЛЬНЫЕ ДОКУМЕНТЫ",.72f,true,ImGuiCol_TextDisabled);}
         }
         for(const auto& item:listing)lawRow(item,false);
         if(shown.empty())ui::Text(favoritesOnly?"Закрепи закон звёздочкой в ридере.":"Ничего не найдено. Попробуй другое слово.",.85f,false,ImGuiCol_TextDisabled);
@@ -661,7 +681,7 @@ void Draw() {
         static bool onlyCurrent=false;
         ui::Toggle("##current-law",&onlyCurrent);ImGui::SameLine();ui::Text("Текущий закон",.83f);
         ImGui::InputTextMultiline("##question",question,sizeof(question),ImVec2(-1,95*scale));
-        if (ui::Button("send-ai",busy ? "Ожидание…" : "Отправить",ui::Icon::Chat,0,true) && !busy && question[0]) {
+        if (ui::Button("send-ai",busy ? "Ожидание…" : "Отправить",ui::Icon::Chat) && !busy && question[0]) {
             std::string text(question);
             if(notebook::Decode(text).size()>12000){Status("Предел сообщения — 12000 символов; текст не отправлен");}
             else {
@@ -691,8 +711,7 @@ void Draw() {
         }
         ImGui::EndChild();ImGui::EndChild();
     }
-    if(lawsWorkspace)ImGui::EndChild();
-    ui::Status(modeHint,status);
+    contentBottom=ImGui::GetItemRectMax().y;
     ImGui::End();
 }
 
@@ -903,11 +922,15 @@ extern "C" __declspec(dllexport) void __cdecl AmazingOverlayTabForTest(unsigned 
     if(tab<=2)SelectTab(static_cast<MainTab>(tab));
 }
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayDesignForTest(unsigned scenario) {
-    if(scenario<12)designPreview=static_cast<int>(scenario);
+    if(scenario<14)designPreview=static_cast<int>(scenario);
 }
 extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayActiveTabForTest() {return static_cast<unsigned>(navigation.active);}
 extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayLayoutForTest() {
     return static_cast<unsigned>(navigation.active) | (Notebook().beside?16u:0u) | (static_cast<unsigned>(settingsPanel.section)<<8);
+}
+extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayUiForTest() {
+    const bool fits=hintBottom<=contentTop && contentBottom<=windowBottom;
+    return (visibleLawRows&255u) | ((selectedLawRows&255u)<<8) | (libraryButtonState<<16) | (fits?1u<<24:0u);
 }
 extern "C" __declspec(dllexport) float __cdecl AmazingOverlayNoteFontForTest() {return Notebook().editor.fontSize;}
 
