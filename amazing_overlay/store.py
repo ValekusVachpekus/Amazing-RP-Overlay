@@ -8,7 +8,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .documents import canonical_url, chunks, document_text, thread_id
+from .documents import canonical_url, chunks, document_text, node_text, thread_id
+from .legal_query import ARTICLE, latest_code, reference
 
 
 def now():
@@ -40,6 +41,9 @@ class Store:
                     title,heading,text, tokenize='unicode61 remove_diacritics 2');
                 CREATE TABLE IF NOT EXISTS preferences(key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS legacy_imports(path TEXT PRIMARY KEY,digest TEXT NOT NULL,doc_id TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS chat_state (
+                    id TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);
+                INSERT OR IGNORE INTO chat_state VALUES('native',0,'[]');
             """)
 
     @contextmanager
@@ -136,6 +140,34 @@ class Store:
                 where + " ORDER BY rank LIMIT ?", args)]
 
     def context(self, query, doc_ids=None, budget=32000):
+        code, articles = reference(query)
+        if code:
+            documents = self.documents()
+            if doc_ids is not None:
+                documents = [doc for doc in documents if doc["id"] in doc_ids]
+            latest = latest_code(documents, code)
+            if latest is None:
+                return []
+            doc_ids = [latest["id"]]
+        if articles:
+            with self.connection() as db:
+                where, args = "", []
+                if doc_ids is not None:
+                    if not doc_ids:
+                        return []
+                    where = " WHERE doc_id IN (" + ",".join("?" for _ in doc_ids) + ")"
+                    args = list(doc_ids)
+                rows = [dict(row) for row in db.execute("SELECT * FROM sections" + where + " ORDER BY doc_id,ordinal", args)]
+            exact = [row for row in rows if (m := ARTICLE.match(row["heading"])) and m.group(1) in articles]
+            # Contents lists sometimes repeat article headings without a body.
+            substantive = {row["heading"] for row in exact if len(row["text"]) > len(row["heading"]) + 25}
+            exact = [row for row in exact if row["heading"] not in substantive or len(row["text"]) > len(row["heading"]) + 25]
+            result, used = [], 0
+            for row in exact:
+                if used + len(row["text"]) <= budget:
+                    result.append(row)
+                    used += len(row["text"])
+            return result
         hits = self.search(query, doc_ids, 12)
         selected, seen = [], set()
         with self.connection() as db:
@@ -152,6 +184,46 @@ class Store:
             used += len(section["text"])
             result.append(section)
         return result
+
+    def citation(self, locator):
+        """Validate a citation against current content, not a recycled SQLite id."""
+        with self.connection() as db:
+            rows = db.execute("SELECT * FROM sections WHERE doc_id=? AND post_id=? ORDER BY ordinal",
+                              (str(locator.get("doc_id", "")), str(locator.get("post_id", "")))).fetchall()
+        matches = [dict(row) for row in rows if hashlib.sha256(row["text"].encode()).hexdigest() == locator.get("fingerprint")]
+        if not matches:
+            raise ValueError("Фрагмент изменился после обновления закона. Задайте вопрос повторно.")
+        section = min(matches, key=lambda row: abs(row["ordinal"] - int(locator.get("ordinal", 0))))
+        doc = self.document(section["doc_id"])
+        post = next(p for p in doc["posts"] if p["post_id"] == section["post_id"])
+        text = "".join(node_text(n) for n in post["blocks"])
+        at = text.find(section["text"])
+        heading = section["heading"]
+        # A long article can span multiple chunks. Jump to its heading, skipping
+        # any identical heading in the table of contents of the same post.
+        heading_at = text.rfind(heading, 0, at + len(heading)) if at >= 0 else -1
+        occurrence = text[:max(0, heading_at)].count(heading)
+        return {"document": doc, "target": {"post_id": section["post_id"], "text": heading, "occurrence": occurrence}}
+
+    def chat(self):
+        with self.connection() as db:
+            row = db.execute("SELECT revision,body FROM chat_state WHERE id='native'").fetchone()
+            return {"revision": row["revision"], "messages": json.loads(row["body"])}
+
+    def save_chat(self, revision, messages):
+        if not isinstance(messages, list) or len(messages) > 500:
+            raise ValueError("Диалог слишком большой. Очистите его перед продолжением.")
+        for item in messages:
+            if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"} or not isinstance(item.get("content"), str):
+                raise ValueError("Некорректное сообщение диалога")
+        body = json.dumps(messages, ensure_ascii=False)
+        if len(body.encode()) > 4 * 1024**2:
+            raise ValueError("Диалог превышает 4 МиБ. Очистите его перед продолжением.")
+        with self.connection() as db:
+            cursor = db.execute("UPDATE chat_state SET revision=revision+1,body=? WHERE id='native' AND revision=?", (body, int(revision)))
+            if cursor.rowcount != 1:
+                raise ValueError("История изменена другим клиентом. Переоткройте чат; локальный текст не перезаписан.")
+        return {"revision": int(revision) + 1}
 
     def get_preference(self, key, default=None):
         with self.connection() as db:

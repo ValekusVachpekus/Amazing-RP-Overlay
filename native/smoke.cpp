@@ -68,6 +68,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     auto design=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayDesignForTest"));
     auto layout=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayLayoutForTest"));
     auto uiState=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayUiForTest"));
+    auto chatAction=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayChatForTest"));
+    auto chatState=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayChatStateForTest"));
     bool previewedDesign=false;
     unsigned tabFrames=0;
     bool previewedNotebook=false;
@@ -87,6 +89,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         device->Present(nullptr, nullptr, nullptr, nullptr);
         if (selfTest) {
             if (probe() & 1u) show();
+            if(wcsstr(command,L"--chat-test") && probe()==3u){
+                if(!chatAction || !chatState)return 26;
+                if(frames==90)chatAction(1);
+                if(frames==150 && (chatState()&0x7ffffu)!=(2u|(1u<<17)|(1u<<18)))return 27;
+                if(frames==152)chatAction(3);
+                if(frames==205 && (chatState()&0x3ffffu)!=(1u<<17))return 28;
+                if(frames==207)chatAction(1);
+                if(frames==245 && (chatState()&0x7ffffu)!=(2u|(1u<<17)|(1u<<18)))return 29;
+            }
+            if(wcsstr(command,L"--chat-reload") && frames==245 && (!chatState || (chatState()&0x7ffffu)!=(2u|(1u<<17)|(1u<<18))))return 30;
             if(designOption && !previewedDesign && probe()==3u && frames>80){
                 if(!design)return 17;
                 design(static_cast<unsigned>(_wtoi(designOption+9)));previewedDesign=true;

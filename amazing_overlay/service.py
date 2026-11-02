@@ -71,7 +71,7 @@ class Backend:
     def dispatch(self, method, params):
         if method == "health":
             return {"version": 1, "app_version": __version__, "native_settings": True, "notes": True,
-                    "shutdown": True, "stopping": self.stopping.is_set(),
+                    "shutdown": True, "stopping": self.stopping.is_set(), "chat_history": True, "citations": True,
                     "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
                     "browsers_dir": configure_browser_environment(), "import_warnings": self.import_warnings}
         if method == "shutdown":
@@ -89,6 +89,12 @@ class Backend:
         if method == "document":
             doc = self.store.document(params["id"])
             return {"document": doc, "html": document_html(doc)}
+        if method == "citation":
+            return self.store.citation(params)
+        if method == "chat_get":
+            return self.store.chat()
+        if method in {"chat_save", "chat_clear"}:
+            return self.store.save_chat(params["revision"], [] if method == "chat_clear" else params["messages"])
         if method == "search":
             return self.store.search(params.get("query", ""), params.get("doc_ids"), params.get("limit", 40))
         if method == "versions":

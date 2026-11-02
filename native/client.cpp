@@ -5,6 +5,7 @@
 #include "notebook_panel.h"
 #include "navigation.h"
 #include "desktop_ui.h"
+#include "chat_panel.h"
 #include <set>
 #include <unordered_map>
 #include <windows.h>
@@ -40,7 +41,7 @@ struct State {
     std::condition_variable wake;
     std::deque<std::function<void()>> queue;
     std::string status = "Подключение к бэкенду…", answer, job;
-    Json documents = Json::array(), hits = Json::array(), sources = Json::array(), history = Json::array();
+    Json documents = Json::array(), hits = Json::array(), sources = Json::array();
     Json preferences = Json::object(), settings = Json::object();
     unsigned settingsRevision = 0;
     bool settingsPending = false, settingsSaved = false;
@@ -55,6 +56,11 @@ struct State {
     bool searching = false, busy = false;
     bool preferencesLoaded = false;
     unsigned searchGeneration = 0;
+    Json chatMessages=Json::array();
+    unsigned chatRevision=0,chatGeneration=0,jobGeneration=0;
+    bool chatReady=false,stopping=false;
+    std::string chatError;
+    Json documentTarget=Json::object();
 };
 // Process-lifetime object: DLL is pinned, no unsafe unload of active callbacks.
 State& S() { static auto* state = new State(); return *state; }
@@ -70,9 +76,11 @@ constexpr wchar_t NativeInputOwner[]=L"AmazingLawOverlay.NativeInputOwner.v1";
 constexpr UINT OpenNotebookMessage=WM_APP+0x416;
 std::atomic<bool> openNotebookRequested{false};
 std::atomic<int> designPreview{-1}; // Standalone D3D9 host only; never injects.
+std::atomic<unsigned> chatTestAction{0};
 // Counts and bounds from the actual rendered frame, for the standalone host.
 unsigned visibleLawRows=0,selectedLawRows=0,libraryButtonState=0;
 float contentTop=0,contentBottom=0,windowBottom=0,hintBottom=0;
+chat_ui::Panel chatPanel;
 notebook::NotebookPanel& Notebook() { static auto* value=new notebook::NotebookPanel();return *value; }
 std::atomic<bool> flushNotebook{false};
 std::array<ImFont*, 13> uiFonts{};
@@ -178,6 +186,7 @@ void LoadDocument(std::string id) {
     {
         std::lock_guard<std::mutex> lock(S().mutex);
         S().selectedId = id;
+        S().documentTarget=Json::object();
         generation = ++S().documentGeneration;
     }
     Enqueue([id, generation] {
@@ -196,8 +205,94 @@ void LoadDocument(std::string id) {
     });
 }
 
+bool PersistChat() {
+    Json messages;unsigned revision,generation;
+    {std::lock_guard<std::mutex> lock(S().mutex);if(!S().chatReady)return false;messages=S().chatMessages;revision=S().chatRevision;generation=S().chatGeneration;}
+    for(auto& message:messages)if(message.contains("sources"))for(auto& source:message["sources"])source.erase("text");
+    try{
+        auto result=Rpc("chat_save",{{"revision",revision},{"messages",messages}});
+        std::lock_guard<std::mutex> lock(S().mutex);
+        if(generation==S().chatGeneration)S().chatRevision=result.at("revision").get<unsigned>();
+        return true;
+    }catch(const std::exception& error){std::lock_guard<std::mutex> lock(S().mutex);if(generation==S().chatGeneration)S().chatError=error.what();return false;}
+}
+
+void ChatFailed(unsigned generation,const std::string& error) {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    if(generation!=S().chatGeneration)return;
+    S().busy=S().stopping=false;S().job.clear();S().chatError=error;
+    if(!S().chatMessages.empty() && S().chatMessages.back().value("role","")=="assistant"){
+        auto& message=S().chatMessages.back();message["status"]="error";message["error"]=error;
+        if(message.value("content","").empty())message["content"]=error;
+    }
+}
+
+void SendChat(const std::string& text,const Json& scope) {
+    unsigned generation;Json history=Json::array();
+    {
+        std::lock_guard<std::mutex> lock(S().mutex);
+        if(S().busy || !S().chatReady)return;
+        for(const auto& message:S().chatMessages)if(message.value("status","")=="complete")history.push_back({{"role",message["role"]},{"content",message["content"]}});
+        generation=S().chatGeneration;S().busy=true;S().stopping=false;S().chatError.clear();S().answer.clear();S().sources=Json::array();
+        static unsigned sequence=0;
+        const auto id=std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64())+"-"+std::to_string(++sequence);
+        S().chatMessages.push_back({{"id",id+"-user"},{"role","user"},{"content",text},{"status","complete"}});
+        S().chatMessages.push_back({{"id",id+"-assistant"},{"role","assistant"},{"content",""},{"status","streaming"},{"sources",Json::array()}});
+    }
+    if(!Enqueue([text,scope,history,generation]{
+        {std::lock_guard<std::mutex> lock(S().mutex);if(generation!=S().chatGeneration)return;}
+        if(!PersistChat()){ChatFailed(generation,"Не удалось сохранить историю. Вопрос не отправлен; текст остался в чате.");return;}
+        {std::lock_guard<std::mutex> lock(S().mutex);if(generation!=S().chatGeneration)return;}
+        try{
+            auto result=Rpc("ai",{{"question",text},{"doc_ids",scope},{"history",history}});const auto job=result.at("job_id").get<std::string>();
+            bool stale;
+            {std::lock_guard<std::mutex> lock(S().mutex);stale=generation!=S().chatGeneration;if(!stale){S().job=job;S().jobGeneration=generation;}}
+            if(stale)Rpc("job_cancel",{{"id",job}});
+        }catch(const std::exception& error){ChatFailed(generation,error.what());PersistChat();}
+    }))ChatFailed(generation,"Очередь занята. Вопрос не отправлен.");
+}
+
+void StopChat() {
+    {std::lock_guard<std::mutex> lock(S().mutex);if(!S().busy || S().stopping)return;S().stopping=true;}
+    if(!Enqueue([]{try{std::string job;{std::lock_guard<std::mutex> lock(S().mutex);job=S().job;}if(!job.empty())Rpc("job_cancel",{{"id",job}});}catch(const std::exception& error){std::lock_guard<std::mutex> lock(S().mutex);S().stopping=false;S().chatError=error.what();}})){
+        std::lock_guard<std::mutex> lock(S().mutex);S().stopping=false;S().chatError="Очередь занята; повторите остановку.";
+    }
+}
+
+void ClearChat() {
+    // Reserve queue space before detaching the active job. A full queue must
+    // leave cancellation and polling of the current answer intact.
+    std::lock_guard<std::mutex> lock(S().mutex);
+    const unsigned generation=S().chatGeneration+1;const std::string job=S().job;
+    if(!Enqueue([generation,job]{
+        try{
+            if(!job.empty())Rpc("job_cancel",{{"id",job}});
+            auto latest=Rpc("chat_get");auto result=Rpc("chat_clear",{{"revision",latest.at("revision")}});
+            std::lock_guard<std::mutex> lock(S().mutex);if(generation==S().chatGeneration){S().chatMessages=Json::array();S().chatRevision=result.at("revision").get<unsigned>();S().chatReady=true;S().chatError.clear();}
+        }catch(const std::exception& error){std::lock_guard<std::mutex> lock(S().mutex);S().chatReady=true;S().chatError=error.what();}
+    })) {S().chatError="Очередь занята; история не удалена.";return;}
+    S().chatGeneration=generation;S().busy=S().stopping=false;S().job.clear();S().chatReady=false;
+}
+
+void OpenCitation(const Json& source) {
+    unsigned generation;
+    {std::lock_guard<std::mutex> lock(S().mutex);generation=++S().documentGeneration;}
+    if(!Enqueue([source,generation]{
+        try{
+            auto result=Rpc("citation",source);auto doc=std::make_shared<const Json>(result.at("document"));
+            Json preferences;
+            {std::lock_guard<std::mutex> lock(S().mutex);if(generation!=S().documentGeneration)return;
+                S().document=doc;S().selectedId=doc->value("id","");S().status=doc->value("title","");S().documentTarget=result.at("target");S().documentTarget["doc_id"]=S().selectedId;
+                S().preferences["document"]=S().selectedId;preferences=S().preferences;
+            }
+            Rpc("state_set",{{"key","native"},{"value",preferences}});
+        }catch(const std::exception& error){std::lock_guard<std::mutex> lock(S().mutex);S().chatError=error.what();}
+    })){std::lock_guard<std::mutex> lock(S().mutex);S().chatError="Очередь занята; повторите переход к статье.";}
+}
+
 void IoThread() {
     auto& state = S();
+    ULONGLONG lastChatSave=0;
     for (;;) {
         try {
             std::function<void()> work;
@@ -220,27 +315,37 @@ void IoThread() {
                     state.testJob.clear();
                 }
             }
-            std::string job;
-            { std::lock_guard<std::mutex> lock(state.mutex); job = state.job; }
+            std::string job;unsigned generation;
+            { std::lock_guard<std::mutex> lock(state.mutex); job = state.job;generation=state.jobGeneration; }
             if (!job.empty()) {
                 auto result = Rpc("job_status", {{"id", job}});
+                bool save=false;
+                {
                 std::lock_guard<std::mutex> lock(state.mutex);
+                if(generation!=state.chatGeneration || state.chatMessages.empty())continue;
                 auto progress = result.value("progress", Json::object());
+                auto& message=state.chatMessages.back();
                 if (progress.contains("answer")) state.answer = progress["answer"].get<std::string>();
                 if (progress.contains("sources")) state.sources = progress["sources"];
-                if (progress.contains("message")) state.status = progress["message"].get<std::string>();
+                message["content"]=state.answer;message["sources"]=state.sources;
                 auto status = result.value("state", "error");
                 if (status != "running") {
                     if (status == "done") {
                         auto answer = result.at("result");
                         state.answer = answer.value("answer", "");
                         state.sources = answer.value("sources", Json::array());
-                        state.history.push_back({{"role", "assistant"}, {"content", state.answer}});
-                        state.status = "Ответ получен";
-                    } else state.status = result.value("error", "Запрос отменён");
-                    state.busy = false;
+                        message["content"]=state.answer;message["sources"]=answer.value("citations",Json::array());message["usage"]=answer.value("usage",Json::object());message["status"]="complete";
+                    } else {
+                        message["status"]=status=="cancelled"?"cancelled":"error";
+                        if(status!="cancelled"){state.chatError=result.value("error","Ошибка ИИ");message["error"]=state.chatError;if(message.value("content","").empty())message["content"]=state.chatError;}
+                    }
+                    state.busy = state.stopping = false;
                     state.job.clear();
+                    save=true;
                 }
+                if(GetTickCount64()-lastChatSave>1000)save=true;
+                }
+                if(save){PersistChat();lastChatSave=GetTickCount64();}
             }
         } catch (const std::exception& error) {
             Status(error.what());
@@ -249,6 +354,9 @@ void IoThread() {
             state.job.clear();
             state.testJob.clear(); state.settingsPending = false;
             state.settingsMessage = error.what();
+            if(!state.chatMessages.empty() && state.chatMessages.back().value("status","")=="streaming"){
+                state.chatMessages.back()["status"]="error";state.chatError="Связь прервана. Полученный текст остался в чате.";state.stopping=false;
+            }
         }
     }
 }
@@ -258,6 +366,15 @@ void Refresh() {
         auto documents = Rpc("documents");
         auto settings = Rpc("settings");
         auto preferences = Rpc("state_get", {{"key", "native"}, {"default", Json::object()}});
+        bool loadChat;{std::lock_guard<std::mutex> lock(S().mutex);loadChat=!S().chatReady;}
+        if(loadChat){
+            try{
+                if(!Rpc("health").value("chat_history",false))throw std::runtime_error("Обновите и перезапустите бэкенд для нового чата.");
+                auto chat=Rpc("chat_get");auto messages=chat.at("messages");
+                for(auto& item:messages)if(item.value("status","")=="streaming")item["status"]="cancelled";
+                std::lock_guard<std::mutex> lock(S().mutex);S().chatMessages=messages;S().chatRevision=chat.at("revision").get<unsigned>();S().chatReady=true;S().chatError.clear();
+            }catch(const std::exception& error){std::lock_guard<std::mutex> lock(S().mutex);S().chatError=error.what();}
+        }
         std::string first;
         {
             std::lock_guard<std::mutex> lock(S().mutex);
@@ -355,13 +472,16 @@ void Draw() {
     static std::string renderedId;
     static std::set<std::string> favorites;
     static bool favoritesOnly=false, focusSearch=false;
+    static float chatWidth=380;
+    static DocumentJump citationJump;
     static std::unordered_map<std::string,float> readingPositions;
     static ULONGLONG layoutSavedAt=0;
     static bool layoutDirty=false;
     auto& state = S();
     Binding toggle, input, previousLaw, nextLaw, scrollUp, scrollDown, notes;
-    Json documents, hits, sources;
-    std::string status, answer, selectedId, settingsMessage;
+    Json documents, hits,chatMessages;
+    bool chatReady=false,stopping=false;std::string chatError;
+    std::string status, selectedId, settingsMessage;
     bool settingsPending, testing;
     bool busy, searching;
     std::shared_ptr<const Json> document;
@@ -387,14 +507,21 @@ void Draw() {
         settingsPending = state.settingsPending; testing = !state.testJob.empty(); settingsMessage = state.settingsMessage;
         if (!settingsPending) settingsPanel.awaitingSave = false;
         selectedId = state.selectedId;
-        documents = state.documents; hits = state.hits; sources = state.sources;
-        status = state.status; answer = state.answer; busy = state.busy; searching = state.searching; document = state.document;
+        documents = state.documents; hits = state.hits;
+        status = state.status; busy = state.busy; searching = state.searching; document = state.document;
+        if(showChat && navigation.active==MainTab::Laws && !notebook.beside && (mode!=Mode::Hidden || visibility.position>0))chatMessages=state.chatMessages;
+        chatReady=state.chatReady;stopping=state.stopping;chatError=state.chatError;
+        if(!state.documentTarget.empty()){
+            citationJump={state.documentTarget.value("doc_id",""),state.documentTarget.value("post_id",""),state.documentTarget.value("text",""),state.documentTarget.value("occurrence",0),true,false};
+            state.documentTarget=Json::object();
+        }
         if (!restored && state.preferencesLoaded) {
             showList = state.preferences.value("left", true);
             for(const auto& id:state.preferences.value("favorites",Json::array()))if(id.is_string())favorites.insert(id.get<std::string>());
             const auto scrolls=state.preferences.value("reading_positions",Json::object());
             if(scrolls.is_object())for(auto it=scrolls.begin();it!=scrolls.end();++it)if(it.value().is_number())readingPositions[it.key()]=std::max(0.f,it.value().get<float>());
             showChat = state.preferences.value("chat", false);
+            chatWidth=state.preferences.value("chat_width",380.f);
             restored = true;
         }
     }
@@ -402,7 +529,8 @@ void Draw() {
     const int preview=designPreview.exchange(-1);
     if(preview>=0){
         SelectTab(preview>=5 && preview<=7 ? MainTab::Settings : preview==3 || preview==4 || preview==8 || preview==9 || preview==12 ? MainTab::Notebook : MainTab::Laws);
-        showList=true;showChat=preview==2;notebook.SetBeside(preview==4);
+        showList=true;showChat=preview==2 || preview>=14;notebook.SetBeside(preview==4);
+        if(preview>=14){chatWidth=500;if(preview==15){std::lock_guard<std::mutex> lock(state.mutex);state.busy=true;if(!state.chatMessages.empty())state.chatMessages.back()["status"]="streaming";}}
         if(preview==1){strcpy_s(search,"таблица");searchChanged=GetTickCount64()-200;}
         if(preview==10)showList=false;
         if(preview>=5 && preview<=7)settingsPanel.section=preview==5?0:preview==6?2:1;
@@ -412,6 +540,10 @@ void Draw() {
         if(preview==9)notebook.NewNote();
         if(preview==11){SelectTab(MainTab::Settings);settingsPanel.draft.light=true;SelectTab(MainTab::Laws);}
     }
+    const auto chatAction=chatReady?chatTestAction.exchange(0):0;
+    if(chatAction==1){SelectTab(MainTab::Laws);showChat=true;SendChat("статья 999999 УК",Json());chatPanel.Focus();}
+    if(chatAction==2)StopChat();
+    if(chatAction==3)ClearChat();
     if(openNotebookRequested.exchange(false)) {
         SelectTab(MainTab::Notebook);
         SetMode(Mode::Input);
@@ -477,12 +609,14 @@ void Draw() {
     const ImVec2 bounded(std::clamp(position.x, 0.f, std::max(0.f, screen.x - size.x)), std::clamp(position.y, 0.f, std::max(0.f, screen.y - size.y)));
     if (bounded.x != position.x || bounded.y != position.y) ImGui::SetWindowPos(bounded);
     auto savePanels = [&] {
-        const bool listValue=showList,chatValue=showChat;
+        const bool listValue=showList,chatValue=showChat;const float widthValue=chatWidth;
         const Json pinned=favorites,positions=readingPositions;
-        Enqueue([listValue,chatValue,pinned,positions] {
+        Enqueue([listValue,chatValue,pinned,positions,widthValue] {
             Json prefs;
             {std::lock_guard<std::mutex> lock(S().mutex);S().preferences["left"]=listValue;S().preferences["chat"]=chatValue;
              S().preferences["favorites"]=pinned;S().preferences["reading_positions"]=positions;prefs=S().preferences;}
+            prefs["chat_width"]=widthValue;
+            {std::lock_guard<std::mutex> lock(S().mutex);S().preferences["chat_width"]=widthValue;}
             Rpc("state_set",{{"key","native"},{"value",prefs}});
         });
         layoutDirty=false;layoutSavedAt=GetTickCount64();
@@ -559,6 +693,7 @@ void Draw() {
         if(text.size()>=sizeof(question)){Status("Для чата выделите меньший фрагмент");return;}
         if(question[0]){Status("В чате уже есть черновик. Скопируйте или очистите его перед добавлением заметки");return;}
         memcpy(question,text.c_str(),text.size()+1);showChat=true;SelectTab(MainTab::Laws);
+        chatPanel.Focus();
     };
     if(notebook.open && !notebook.beside) {
         notebook.Draw(mode==Mode::Input,attachNote,uiFonts[appearance.font-14]);
@@ -593,7 +728,7 @@ void Draw() {
     ImGui::SameLine();ImGui::BeginChild("match-count",ImVec2(counterWidth,40*scale),ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::SetCursorPosY((40*scale-ImGui::GetFontSize())*.5f);ImGui::TextDisabled("%s",count);ImGui::EndChild();
     ImGui::SameLine();if(ui::Button("clear-search","Сбросить поиск",ui::Icon::Close,36*scale,false,true)){search[0]=0;searchChanged=GetTickCount64();}
-    ImGui::SameLine();if(ui::Button("toggle-chat","ИИ-помощник",ui::Icon::Chat,40*scale,showChat,true)){showChat=!showChat;savePanels();}
+    ImGui::SameLine();if(ui::Button("toggle-chat","ИИ-помощник",ui::Icon::Chat,40*scale,showChat,true)){showChat=!showChat;if(showChat)chatPanel.Focus();savePanels();}
     ImGui::SetCursorPosY(toolbar+52*scale);
     bool findNext = navigation.active==MainTab::Laws && focused && (Down(VK_F3) || (searchFocused && Down(VK_RETURN)));
     bool findBack = findNext && Down(VK_SHIFT);
@@ -644,7 +779,10 @@ void Draw() {
     const bool besideNotes=notebook.open && notebook.beside;
     const float readerAvailable=ImGui::GetContentRegionAvail().x;
     const float readerHeight=std::max(20.f,ImGui::GetContentRegionAvail().y-bodyBottom);
-    float readerWidth = besideNotes ? std::max(180.f*scale,readerAvailable*notebook.lawFraction) : showChat ? std::max(240.0f * scale, ImGui::GetContentRegionAvail().x - 350 * scale) : 0;
+    const float usable=std::max(100*scale,readerAvailable-2*ImGui::GetStyle().ItemSpacing.x-5*scale);
+    const float minChat=std::min(280*scale,usable*.5f),minReader=std::min(240*scale,usable*.5f);
+    const float chatPixels=std::clamp(chatWidth*scale,minChat,std::max(minChat,usable-minReader));
+    float readerWidth = besideNotes ? std::max(180.f*scale,readerAvailable*notebook.lawFraction) : showChat ? usable-chatPixels : 0;
     ImGui::BeginChild("reader", ImVec2(readerWidth, -bodyBottom), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
     const auto docId = document ? document->value("id", "") : "";
     if(docId!=renderedId){ImGui::SetScrollY(readingPositions.count(docId)?readingPositions[docId]:0);renderedId=docId;readerSearch.active=0;readerSearch.jump=!readerSearch.query.empty();}
@@ -661,7 +799,11 @@ void Draw() {
         // Bounded wrapping leaves the star free while keeping long titles readable.
         ui::Text(LawDisplayTitle(document->value("title","Закон")),1.5f,true,ImGuiCol_Text,std::max(40.f,starX-28*scale));
         ui::Text(document->value("structured",true)?"Источник: форум Amazing RP":"Импорт TXT · без исходной структуры",.78f,false,ImGuiCol_TextDisabled);
-        ui::Divider();DrawDocument(*document,&readerSearch);
+        if(citationJump.pending && citationJump.doc_id!=docId)citationJump.pending=false;
+        const bool requestedJump=citationJump.pending;
+        if(requestedJump)readerSearch.jump=false;
+        ui::Divider();DrawDocument(*document,&readerSearch,&citationJump);
+        if(requestedJump && !citationJump.found){std::lock_guard<std::mutex> lock(state.mutex);state.chatError="Закон открыт, но фрагмент не удалось отобразить. Повторите вопрос после обновления источника.";}
         const float y=ImGui::GetScrollY();
         if(std::abs(readingPositions[docId]-y)>.5f){readingPositions[docId]=y;layoutDirty=true;}
     }else ui::Text(status,.9f,false,ImGuiCol_TextDisabled);
@@ -673,43 +815,22 @@ void Draw() {
         ImGui::SameLine();notebook.Draw(mode==Mode::Input,attachNote,uiFonts[appearance.font-14]);
     }
     if (showChat && !besideNotes) {
+        ImGui::SameLine();ImGui::InvisibleButton("reader-chat-split",ImVec2(5*scale,readerHeight));
+        if(mode==Mode::Input && ImGui::IsItemActive()){chatWidth=(chatPixels-ImGui::GetIO().MouseDelta.x)/scale;layoutDirty=true;}
+        if(ImGui::IsItemHovered())ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         ImGui::SameLine();
         ImGui::BeginChild("chat", ImVec2(0, -bodyBottom), ImGuiChildFlags_Borders);
-        ui::Text("ИИ-помощник",1.25f,true);
-        ui::Text("Ответы на основе законов · проверяй источники",.78f,false,ImGuiCol_TextDisabled);
-        ui::Divider();
-        static bool onlyCurrent=false;
-        ui::Toggle("##current-law",&onlyCurrent);ImGui::SameLine();ui::Text("Текущий закон",.83f);
-        ImGui::InputTextMultiline("##question",question,sizeof(question),ImVec2(-1,95*scale));
-        if (ui::Button("send-ai",busy ? "Ожидание…" : "Отправить",ui::Icon::Chat) && !busy && question[0]) {
-            std::string text(question);
-            if(notebook::Decode(text).size()>12000){Status("Предел сообщения — 12000 символов; текст не отправлен");}
-            else {
-            question[0] = 0;
-            Json scope = onlyCurrent && document ? Json::array({document->value("id", "")}) : Json();
-            { std::lock_guard<std::mutex> lock(state.mutex); state.busy = true; state.answer.clear(); state.sources = Json::array(); }
-            Enqueue([text, scope] {
-                Json history;
-                { std::lock_guard<std::mutex> lock(S().mutex); history = S().history; }
-                auto result = Rpc("ai", {{"question", text}, {"doc_ids", scope}, {"history", history}});
-                std::lock_guard<std::mutex> lock(S().mutex);
-                S().job = result.at("job_id").get<std::string>();
-                S().history.push_back({{"role", "user"}, {"content", text}});
-                while (S().history.size() > 20) S().history.erase(S().history.begin());
-            });
-            }
+        const auto action=chatPanel.Draw(chatMessages,question,sizeof(question),busy,stopping,chatReady,chatError);
+        if(action.clear)ClearChat();
+        else if(action.stop)StopChat();
+        else if(action.send && question[0] && !busy && chatReady){
+            const std::string text=chat_ui::Trim(question);
+            if(text.empty()){}
+            else if(notebook::Decode(text).size()>12000){std::lock_guard<std::mutex> lock(state.mutex);state.chatError="Предел сообщения — 12000 символов. Текст не отправлен.";}
+            else {SendChat(text,chatPanel.onlyCurrent && document?Json::array({docId}):Json());question[0]=0;chatPanel.Focus();}
         }
-        ImGui::SameLine();
-        if (ui::Button("stop-ai","Стоп",ui::Icon::Close)) Enqueue([] { std::string job; { std::lock_guard<std::mutex> lock(S().mutex); job = S().job; } if (!job.empty()) Rpc("job_cancel", {{"id", job}}); });
-        if (ui::Button("copy-ai","Копировать",ui::Icon::Files)) ImGui::SetClipboardText(answer.c_str());
-        ui::Divider();ImGui::BeginChild("answer",ImVec2(0,0));
-        ui::Text(status,.78f,false,ImGuiCol_TextDisabled);
-        ui::Text(answer.empty() ? (busy?"Готовим ответ…":"Задай вопрос по законодательству в поле выше.") : answer,.95f);
-        for (const auto& source : sources) {
-            auto label = "[" + source.value("label", "") + "] " + source.value("heading", "");
-            if (ImGui::Selectable(label.c_str())) LoadDocument(source.value("doc_id", ""));
-        }
-        ImGui::EndChild();ImGui::EndChild();
+        if(!action.citation.empty())OpenCitation(action.citation);
+        ImGui::EndChild();
     }
     contentBottom=ImGui::GetItemRectMax().y;
     ImGui::End();
@@ -922,7 +1043,14 @@ extern "C" __declspec(dllexport) void __cdecl AmazingOverlayTabForTest(unsigned 
     if(tab<=2)SelectTab(static_cast<MainTab>(tab));
 }
 extern "C" __declspec(dllexport) void __cdecl AmazingOverlayDesignForTest(unsigned scenario) {
-    if(scenario<14)designPreview=static_cast<int>(scenario);
+    if(scenario<16)designPreview=static_cast<int>(scenario);
+}
+extern "C" __declspec(dllexport) void __cdecl AmazingOverlayChatForTest(unsigned action){chatTestAction=action;}
+extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayChatStateForTest(){
+    std::lock_guard<std::mutex> lock(S().mutex);
+    const auto& ms=S().chatMessages;
+    return static_cast<unsigned>(ms.size()) | (S().busy?1u<<16:0u) | (S().chatReady?1u<<17:0u) |
+        (!ms.empty() && ms.back().value("status","")=="complete"?1u<<18:0u);
 }
 extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayActiveTabForTest() {return static_cast<unsigned>(navigation.active);}
 extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayLayoutForTest() {

@@ -11,6 +11,8 @@
 
 namespace {
 DocumentSearch* currentSearch = nullptr;
+DocumentJump* currentJump=nullptr;
+bool jumpPost=false;
 std::unordered_map<std::string, std::vector<std::pair<size_t, size_t>>> matchCache;
 const std::vector<std::pair<size_t, size_t>>& CachedMatches(const std::string& text) {
     const auto found = matchCache.find(text);
@@ -31,6 +33,12 @@ float RichText(const std::string& text, ImVec2 origin, float width, ImU32 color)
     const char* end = begin + text.size();
     const char* line = begin;
     float y = origin.y;
+    size_t jumpAt=std::string::npos;
+    if(currentJump && currentJump->pending && jumpPost){
+        const auto targets=reader_search::Matches(text,currentJump->text);
+        if(currentJump->occurrence>=static_cast<int>(targets.size()))currentJump->occurrence-=static_cast<int>(targets.size());
+        else if(currentJump->occurrence>=0)jumpAt=targets[currentJump->occurrence].first;
+    }
     while (line < end) {
         const char* newline = std::find(line, end, '\n');
         const char* stop = font->CalcWordWrapPositionA(size / font->FontSize, line, newline, std::max(20.0f, width));
@@ -47,6 +55,9 @@ float RichText(const std::string& text, ImVec2 origin, float width, ImU32 color)
             if (active && currentSearch->jump && from == matches[i].first) ImGui::SetScrollFromPosY(y - ImGui::GetWindowPos().y, .35f);
         }
         draw->AddText(ImVec2(origin.x, y), color, line, stop);
+        if(jumpAt!=std::string::npos && jumpAt>=static_cast<size_t>(line-begin) && jumpAt<static_cast<size_t>(stop-begin)){
+            ImGui::SetScrollFromPosY(y-ImGui::GetWindowPos().y,.2f);currentJump->pending=false;currentJump->found=true;
+        }
         y += height;
         line = stop;
         if (line == newline && line < end) ++line;
@@ -199,7 +210,7 @@ void Node(const Json& node) {
 }
 }
 
-void DrawDocument(const Json& document, DocumentSearch* search) {
+void DrawDocument(const Json& document, DocumentSearch* search,DocumentJump* target) {
     static const Json* previousDocument = nullptr;
     static std::string previousQuery;
     const std::string query = search ? search->query : "";
@@ -207,13 +218,17 @@ void DrawDocument(const Json& document, DocumentSearch* search) {
         matchCache.clear(); previousDocument = &document; previousQuery = query;
     }
     currentSearch = search;
+    currentJump=target;
     if (search) search->cursor = 0;
     if (!document.contains("posts")) return;
     for (const auto& post : document.at("posts")) {
+        jumpPost=target && post.value("post_id","")==target->post_id;
         ImGui::PushID(post.value("post_id", "").c_str());
         for (const auto& node : post.at("blocks")) Node(node);
         ImGui::PopID();
     }
     if (search) { search->total = search->cursor; search->jump = false; }
     currentSearch = nullptr;
+    if(target)target->pending=false;
+    currentJump=nullptr;jumpPost=false;
 }

@@ -95,7 +95,7 @@ inline bool Toggle(const char* label, bool* value) {
 }
 inline void Divider() {ImGui::Spacing();ImGui::Separator();ImGui::Spacing();}
 inline void Status(const std::string& mode,const std::string& status) {
-    std::string text=mode+(status.empty()?"":" · "+status);
+    std::string text=mode+(status.empty()?"":mode.empty()?status:" · "+status);
     // Forum titles can contain line breaks. A one-line status must not paint
     // those extra lines over the search bar or outside its allocated bounds.
     for(char& ch:text)if(ch=='\r' || ch=='\n' || ch=='\t')ch=' ';

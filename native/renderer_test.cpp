@@ -33,6 +33,19 @@ int main() {
     search.query = "missing";
     ImGui::NewFrame(); ImGui::Begin("test"); DrawDocument(doc, &search); ImGui::End(); ImGui::Render();
     if (search.total != 0) return 4;
+    Json jumpDoc={{"posts",Json::array({{{"post_id","1"},{"blocks",Json::array()}}})}};
+    auto& jumpBlocks=jumpDoc["posts"][0]["blocks"];
+    auto textNode=[](std::string s){return Json{{"tag","p"},{"children",Json::array({{{"tag","text"},{"text",s}}})}};};
+    jumpBlocks.push_back(textNode("Article 51. Powers"));
+    for(int n=0;n<60;++n)jumpBlocks.push_back(textNode("Filler between contents and actual article."));
+    jumpBlocks.push_back(textNode("Article 51. Powers"));
+    DocumentJump target{"doc","1","Article 51. Powers",1,true,false};
+    for(int f=0;f<3;++f){
+        ImGui::NewFrame();ImGui::SetNextWindowSize(ImVec2(240,240));ImGui::Begin("citation");
+        DrawDocument(jumpDoc,nullptr,&target);
+        if(f==2 && (!target.found || target.pending || ImGui::GetScrollY()<500))return 5;
+        ImGui::End();ImGui::Render();
+    }
     ImGui::DestroyContext();
     std::cout << "Renderer: PASS (wrapped text, table matches, case folding, active match)\n";
 }

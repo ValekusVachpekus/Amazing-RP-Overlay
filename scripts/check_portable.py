@@ -43,6 +43,19 @@ def main():
             rpc("state_set", {"key": "portable-test", "value": "работает"})
             assert rpc("state_get", {"key": "portable-test"}) == "работает"
             print("PORTABLE BACKEND: PASS; no local laws or credentials bundled")
+            assert health.get("chat_history") and health.get("citations"), "Update backend for native chat support"
+            chat = rpc("chat_get")
+            assert not chat["messages"], "Release must not contain a personal chat history"
+            saved_chat = rpc("chat_save", {"revision": chat["revision"], "messages": [{"id": "portable", "role": "user", "content": "Проверка чата"}]})
+            assert rpc("chat_get")["messages"][0]["content"] == "Проверка чата"
+            rpc("chat_clear", {"revision": saved_chat["revision"]})
+            try:
+                rpc("chat_save", {"revision": saved_chat["revision"], "messages": chat["messages"]})
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("A late chat write restored cleared history")
+            print("PORTABLE CHAT: PASS; private history, atomic clear and stale-write protection")
             assert health.get("notes"), "Update the backend for notebook support"
             notes_root = Path(directory) / "Личные заметки"
             rpc("settings_save", {"notes_dir": str(notes_root)})

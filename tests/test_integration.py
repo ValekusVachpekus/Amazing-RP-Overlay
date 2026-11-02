@@ -362,8 +362,18 @@ class IntegrationTest(unittest.TestCase):
         output = ROOT / ".cache/obsidian-visual"
         output.mkdir(exist_ok=True)
         document_count = len({item["id"] for item in rpc("documents")})
+        import hashlib
+        from amazing_overlay.store import Store
+        with Store(Path(self.temporary.name) / "laws.db").connection() as db:
+            section = dict(db.execute("SELECT * FROM sections WHERE doc_id='test-table' AND heading LIKE 'Статья%' LIMIT 1").fetchone())
+        source = {**section, "label": "S1", "fingerprint": hashlib.sha256(section["text"].encode()).hexdigest()}
+        chat = rpc("chat_get")
+        rpc("chat_save", {"revision": chat["revision"], "messages": [
+            {"id": "preview-user", "role": "user", "status": "complete", "content": "Какие должности указаны в статье 12?"},
+            {"id": "preview-assistant", "role": "assistant", "status": "complete", "sources": [source],
+             "content": "**Статья 12** содержит таблицу должностей. [S1]\n\n| Ведомство | Руководитель |\n|---|---|\n| МВД | Генерал |\n\n- Проверяйте точный текст статьи.\n- Для перехода нажмите [S1]."}]})
         try:
-            for scenario in range(14):
+            for scenario in range(16):
                 with self.subTest(scenario=scenario):
                     capture = output / f"{scenario:02}.bmp"
                     result = subprocess.run([str(binary), "--self-test", f"--design={scenario}", f"--expect-law-rows={document_count}"],
@@ -377,6 +387,22 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn("test-table", rpc("state_get", {"key": "native"})["favorites"])
         finally:
             rpc("settings_save", {key: original[key] for key in ("font_size", "opacity", "theme")})
+            chat = rpc("chat_get")
+            rpc("chat_clear", {"revision": chat["revision"]})
+
+    def test_native_chat_persistence_and_clear(self):
+        binary = ROOT / "native/out-local/overlay_native_smoke.exe"
+        if not binary.exists():
+            self.skipTest("Build native/out-local first")
+        chat = rpc("chat_get")
+        rpc("chat_clear", {"revision": chat["revision"]})
+        for option in ("--chat-test", "--chat-reload"):
+            result = subprocess.run([str(binary), "--self-test", option], cwd=binary.parent, timeout=25, capture_output=True,
+                                    env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name))
+            self.assertEqual(result.returncode, 0, (option, result.stderr.decode(errors="replace")))
+            self.assertEqual(len(rpc("chat_get")["messages"]), 2)
+        chat = rpc("chat_get")
+        rpc("chat_clear", {"revision": chat["revision"]})
 
     def test_manager_offscreen(self):
         from amazing_overlay.ui import ManagerWindow
