@@ -40,6 +40,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     const bool selfTest = command && wcsstr(command, L"--self-test");
+    const auto designOption=command?wcsstr(command,L"--design="):nullptr;
     WNDCLASSW klass{}; klass.lpfnWndProc = WindowProc; klass.hInstance = instance; klass.lpszClassName = L"OverlaySmoke";
     RegisterClassW(&klass);
     HWND window = CreateWindowW(klass.lpszClassName, L"Amazing DLL test host — Ctrl+L, Alt+F", WS_OVERLAPPEDWINDOW,
@@ -64,6 +65,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     auto selectTab=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayTabForTest"));
     auto activeTab=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayActiveTabForTest"));
     auto noteFont=reinterpret_cast<NoteFont>(GetProcAddress(library,"AmazingOverlayNoteFontForTest"));
+    auto design=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayDesignForTest"));
+    auto layout=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayLayoutForTest"));
+    bool previewedDesign=false;
     unsigned tabFrames=0;
     bool previewedNotebook=false;
     bool previewedSettings = false;
@@ -82,6 +86,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         device->Present(nullptr, nullptr, nullptr, nullptr);
         if (selfTest) {
             if (probe() & 1u) show();
+            if(designOption && !previewedDesign && probe()==3u && frames>80){
+                if(!design)return 17;
+                design(static_cast<unsigned>(_wtoi(designOption+9)));previewedDesign=true;
+            }
             if(probe()==3u && wcsstr(command,L"--tabs")){
                 if(!selectTab || !activeTab || !noteFont || !settingsPreview)return 9;
                 ++tabFrames;
@@ -113,6 +121,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
                 previewedSettings = true;
             }
             if (++frames >= 250 && probe() == 3u) {
+                if(designOption){
+                    const auto scenario=static_cast<unsigned>(_wtoi(designOption+9));
+                    if(!previewedDesign || !layout)return 18;
+                    if(scenario==4 && (layout()&31u)!=17u)return 19;
+                    if(scenario>=5 && scenario<=7 && (layout()&15u)!=2u)return 20;
+                    if(scenario==6 && (layout()>>8)!=2u)return 21;
+                    if(scenario==7 && (layout()>>8)!=1u)return 22;
+                }
                 if (!visibility) return 6;
                 for (int cycle = 0; cycle < 100; ++cycle) {
                     // Loss/restoration of focus must never turn Hidden into View.

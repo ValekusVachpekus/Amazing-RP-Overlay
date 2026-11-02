@@ -1,5 +1,6 @@
 #include "rpc.h"
 #include "text_search.h"
+#include "desktop_ui.h"
 #include <imgui.h>
 #include <algorithm>
 #include <functional>
@@ -25,7 +26,7 @@ float RichText(const std::string& text, ImVec2 origin, float width, ImU32 color)
     if (currentSearch) currentSearch->cursor += static_cast<int>(matches.size());
     auto* font = ImGui::GetFont();
     auto* draw = ImGui::GetWindowDrawList();
-    const float size = ImGui::GetFontSize(), height = ImGui::GetTextLineHeight() + 3;
+    const float size = ImGui::GetFontSize(), height = ImGui::GetTextLineHeight() + ui::Px(5);
     const char* begin = text.c_str();
     const char* end = begin + text.size();
     const char* line = begin;
@@ -178,13 +179,23 @@ void Node(const Json& node) {
     auto text = CompactDisplayText(Text(node));
     if (text.find_first_not_of(" \r\n\t") == std::string::npos) return;
     bool heading = tag.size() == 2 && tag[0] == 'h';
-    if (heading) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
+    const bool chapter=heading && (text.rfind("ГЛАВА",0)==0 || text.rfind("Глава",0)==0 || text.rfind("РАЗДЕЛ",0)==0);
+    const bool boldFont=heading && ui::Bold();
+    if(boldFont)ImGui::PushFont(ui::Bold());
+    if(heading)ImGui::Dummy(ImVec2(0,ui::Px(chapter?12:8)));
     if (tag == "li") ImGui::Bullet();
     const auto origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    float height = RichText(text, origin, width, ImGui::GetColorU32(ImGuiCol_Text));
-    ImGui::Dummy(ImVec2(width, height));
-    if (heading) { ImGui::PopStyleColor(); ImGui::Spacing(); }
+    const float padding=heading?ui::Px(12):0;
+    if(heading){
+        const float height=ImGui::CalcTextSize(text.c_str(),nullptr,false,std::max(20.f,width-padding*2)).y*1.4f+padding*2;
+        auto* draw=ImGui::GetWindowDrawList();
+        if(chapter)draw->AddRectFilled(origin,ImVec2(origin.x+ui::Px(4),origin.y+height),ui::Color(ImGuiCol_CheckMark));
+        else draw->AddRectFilled(origin,ImVec2(origin.x+width,origin.y+height),ui::Color(ImGuiCol_FrameBg),ui::Px(8));
+    }
+    float height = RichText(text, ImVec2(origin.x+padding,origin.y+padding), std::max(20.f,width-padding*2), ImGui::GetColorU32(chapter?ImGuiCol_CheckMark:ImGuiCol_Text));
+    ImGui::Dummy(ImVec2(width, height+padding*2));
+    if(boldFont)ImGui::PopFont();
 }
 }
 

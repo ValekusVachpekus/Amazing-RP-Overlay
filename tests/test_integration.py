@@ -170,6 +170,33 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         self.assertTrue(capture.exists())
 
+    def test_native_obsidian_design_screens(self):
+        """Actual D3D9/ImGui frames; this does not validate game input/focus."""
+        binary = ROOT / "native/out-local/overlay_native_smoke.exe"
+        if not binary.exists():
+            self.skipTest("Build native/out-local first")
+        original = rpc("settings")
+        rpc("settings_save", {"font_size": 17, "opacity": 1, "theme": "dark"})
+        rpc("state_set", {"key": "native", "value": {"left": True, "chat": False, "document": "test-table", "favorites": ["test-table"]}})
+        rpc("state_set", {"key": "notebook-native", "value": {"path": "Пример.txt", "beside": False}})
+        output = ROOT / ".cache/obsidian-visual"
+        output.mkdir(exist_ok=True)
+        try:
+            for scenario in range(12):
+                with self.subTest(scenario=scenario):
+                    capture = output / f"{scenario:02}.bmp"
+                    result = subprocess.run([str(binary), "--self-test", f"--design={scenario}"],
+                                            cwd=binary.parent, timeout=25, capture_output=True,
+                                            env=dict(os.environ, AMAZING_OVERLAY_DATA=self.temporary.name,
+                                                     AMAZING_OVERLAY_CAPTURE=str(capture)))
+                    self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+                    self.assertGreater(capture.stat().st_size, 100000)
+            # The notebook layout's late first response must not replace the
+            # user's explicit choice of "beside" (scenario 4 checks that bit).
+            self.assertIn("test-table", rpc("state_get", {"key": "native"})["favorites"])
+        finally:
+            rpc("settings_save", {key: original[key] for key in ("font_size", "opacity", "theme")})
+
     def test_manager_offscreen(self):
         from amazing_overlay.ui import ManagerWindow
         window = ManagerWindow()

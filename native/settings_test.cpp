@@ -1,5 +1,6 @@
 #include "settings_panel.h"
 #include "navigation.h"
+#include "desktop_ui.h"
 #include <iostream>
 
 int main() {
@@ -22,8 +23,9 @@ int main() {
     SettingsPanel panel;
     panel.Receive({{"font_size", 18}, {"opacity", .7}, {"theme", "light"}, {"animations", false}, {"ai_model", "saved-model"}});
     panel.Open(); panel.draft.font = 26; panel.draft.opacity = .3f; panel.key[0] = 'x';
+    std::strcpy(panel.hotkeys[0].data(),"F1");
     const auto draft = panel.Values();
-    if (draft["font_size"] != 26 || draft["ai_api_key"] != "x") return 5;
+    if (draft["font_size"] != 26 || draft["ai_api_key"] != "x" || draft["toggle_hotkey"]!="F1" || draft["next_law_hotkey"]!="Alt+Right") return 5;
     panel.Cancel();
     if (panel.Current().font != 18 || panel.key[0] || !panel.Current().light) return 6;
     panel.Open(); panel.awaitingSave = true;
@@ -50,12 +52,14 @@ int main() {
         Appearance look; look.light = light; look.font = 26; look.opacity = .3f;
         ApplyAppearance(look, .5f);
         if (std::abs(ImGui::GetStyle().Alpha - .15f) > .001f) return 9;
-        if (std::abs(ImGui::GetStyle().WindowPadding.x - std::floor(14 * 26.f / 17)) > .01f) return 12;
+        if (std::abs(ImGui::GetStyle().WindowPadding.x - std::floor(16 * 26.f / 17)) > .01f) return 12;
         if (light != (ImGui::GetStyleColorVec4(ImGuiCol_Text).x < .5f)) return 10;
-        ImGui::NewFrame(); ImGui::SetNextWindowSize(ImVec2(1100, 900)); ImGui::Begin("test");
-        panel.Open(); panel.Draw(false, false, "Connection test result");
-        ImGui::End(); ImGui::Render();
-        if (!ImGui::GetDrawData()->TotalVtxCount) return 11;
+        for(int page=0;page<3;++page)for(float windowWidth:{750.f,1100.f}){
+            ImGui::NewFrame(); ImGui::SetNextWindowSize(ImVec2(windowWidth, 900)); ImGui::Begin("test");
+            panel.Open();panel.section=page;panel.Draw(false, false, "Connection test result");
+            ImGui::End(); ImGui::Render();
+            if (!ImGui::GetDrawData()->TotalVtxCount) return 11;
+        }
     }
     ImGui::DestroyContext();
     std::cout << "Settings: PASS (save/cancel, key clearing, themes, alpha, scale, reversible 200ms fade)\n";
