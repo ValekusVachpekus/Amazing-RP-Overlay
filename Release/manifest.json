@@ -1,22 +1,22 @@
 {
   "format": 1,
-  "source_revision": "a2938083dd235607d6ec3a844524fa2b9bbcd6b8",
+  "source_revision": "a638c3618cd2f357354db40439aaaf88ce0222e9",
   "files": {
     "AmazingLawClient.asi": {
-      "bytes": 1130496,
-      "sha256": "c152fbb3ed8e9c094aae754acf01495bb0bbf59a74d7dac17168a7fe9d0194f6"
+      "bytes": 1156608,
+      "sha256": "4ca0646c21d9739a2ab369c6fb04e0eb11de9b8bc72d1476278cf6f7707b7d3f"
     },
     "AmazingLawClient.dll": {
-      "bytes": 1130496,
-      "sha256": "c152fbb3ed8e9c094aae754acf01495bb0bbf59a74d7dac17168a7fe9d0194f6"
+      "bytes": 1156608,
+      "sha256": "4ca0646c21d9739a2ab369c6fb04e0eb11de9b8bc72d1476278cf6f7707b7d3f"
     },
     "AmazingLawOverlay.exe": {
-      "bytes": 5590435,
-      "sha256": "fd5a838f9d5010e3dc7f3164d1d2e6cea16969adc4f5a07488bc071693120ae8"
+      "bytes": 5592812,
+      "sha256": "c6ad20badea43ed126c436367b2373132eb08570d076fadc2fb159c905652684"
     },
     "README.md": {
-      "bytes": 9513,
-      "sha256": "f2ac16360c8a8b25df1ed3b580582f5f68c31922767dbce5fd4d98b1961ae7b8"
+      "bytes": 10095,
+      "sha256": "366d212782d369fc9bc96afbeb0d92dcce4e1a7ed777d051b85e11601f907e01"
     },
     "_internal/PySide6/MSVCP140.dll": {
       "bytes": 549176,
@@ -820,7 +820,7 @@
     },
     "_internal/base_library.zip": {
       "bytes": 880569,
-      "sha256": "e250018f828b1caa33d5797b35a7539932335f3d5a5f5ae09e8d8424b3ac2c29"
+      "sha256": "35d4bfa587f00a0cb917943218dab02031dfa7c6b60ef781ef6e64213f51c7ce"
     },
     "_internal/bs4/__init__.py": {
       "bytes": 44562,
@@ -7843,20 +7843,20 @@
       "sha256": "1fb2d66c056f69e8bbdd8c6c910e72697874dae680264f8fb4b4df19af98aa2e"
     },
     "docs/GAME_ACCEPTANCE.md": {
-      "bytes": 9467,
-      "sha256": "6e9b20e6abc8d4201c2c73c967f2585855cacfd3e81288aa6f24bde17ce3d862"
+      "bytes": 10350,
+      "sha256": "d80c346a216748feb69cfc47d88edd4b4c189e0293c7c49b7ec7e0f86bfa2ffb"
     },
     "docs/NOTEBOOK.md": {
       "bytes": 7484,
       "sha256": "65946a7427a76b6f3fbc7a0470cbb2b6bff99fc00cad2bb4c7316195e1a36370"
     },
     "docs/PROTOCOL.md": {
-      "bytes": 9344,
-      "sha256": "a54d084ea98973ff443646f77baa34000aedd27caf0ff3cb696387ebc39ddef0"
+      "bytes": 12126,
+      "sha256": "4dbbdff72aa708445e42ed71b14052b3f8ed0d2e2c52f6295202b59cb28d81fd"
     },
     "docs/V2.md": {
-      "bytes": 30931,
-      "sha256": "3a87ca82c2090e85fcedfe2a06d07406399ddd92fdb43a01151c4e874ee22d77"
+      "bytes": 32862,
+      "sha256": "dce7bd55b216133bb09230823d9d5496e913be117be18cfc9addf93182983e71"
     },
     "licenses/PySide6/LicenseRef-Qt-Commercial.txt": {
       "bytes": 470,
