@@ -75,6 +75,16 @@ class IntegrationTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             rpc("unknown_method")
 
+    def test_full_context_preflight(self):
+        self.assertTrue(rpc("health")["full_ai_context"])
+        self.assertEqual(rpc("ai_context", {"context_mode": "none"}), {"documents": 0, "context_chars": 0})
+        plan = rpc("ai_context", {"context_mode": "selected", "doc_ids": ["test-table"]})
+        self.assertEqual(plan["documents"], 1)
+        self.assertGreater(plan["context_chars"], 100)
+        self.assertNotIn("sources", plan)
+        with self.assertRaisesRegex(RuntimeError, "Выберите"):
+            rpc("ai_context", {"context_mode": "selected", "doc_ids": []})
+
     def test_notebook_widget_autosave_search_undo_and_recovery(self):
         from amazing_overlay import notebook_ui
         from PySide6.QtGui import QTextCursor
@@ -373,7 +383,7 @@ class IntegrationTest(unittest.TestCase):
             {"id": "preview-assistant", "role": "assistant", "status": "complete", "sources": [source],
              "content": "**Статья 12** содержит таблицу должностей. [S1]\n\n| Ведомство | Руководитель |\n|---|---|\n| МВД | Генерал |\n\n- Проверяйте точный текст статьи.\n- Для перехода нажмите [S1]."}]})
         try:
-            for scenario in range(16):
+            for scenario in range(18):
                 with self.subTest(scenario=scenario):
                     capture = output / f"{scenario:02}.bmp"
                     result = subprocess.run([str(binary), "--self-test", f"--design={scenario}", f"--expect-law-rows={document_count}"],

@@ -119,6 +119,27 @@ class Store:
                 raise ValueError("Документ не найден")
             return json.loads(row[0])
 
+    def complete_documents(self, doc_ids=None):
+        """Read bodies and citation locators from one consistent SQLite snapshot."""
+        if doc_ids is not None and (not isinstance(doc_ids, list) or
+                                    not all(isinstance(ident, str) for ident in doc_ids)):
+            raise ValueError("Некорректный список законов")
+        with self.connection() as db:
+            db.execute("BEGIN")
+            rows = db.execute("SELECT id,body,updated FROM documents ORDER BY title,id").fetchall()
+            chosen = None if doc_ids is None else set(doc_ids)
+            if chosen is not None and chosen - {row["id"] for row in rows}:
+                raise ValueError("Выбранный закон больше не существует. Проверьте список источников чата.")
+            result = []
+            for row in rows:
+                if chosen is None or row["id"] in chosen:
+                    sections = [dict(section) for section in db.execute(
+                        "SELECT * FROM sections WHERE doc_id=? ORDER BY ordinal", (row["id"],))]
+                    doc = json.loads(row["body"])
+                    doc["updated"] = row["updated"]
+                    result.append((doc, sections))
+            return result
+
     def search(self, query, doc_ids=None, limit=40):
         terms = re.findall(r"[\w]+", query.casefold(), flags=re.UNICODE)[:24]
         if not terms:

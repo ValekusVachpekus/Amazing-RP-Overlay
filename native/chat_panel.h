@@ -1,11 +1,43 @@
 #pragma once
 #include "rpc.h"
 #include "desktop_ui.h"
+#include "display_text.h"
+#include "plain_editor.h"
 #include <map>
+#include <set>
 #include <regex>
 #include <sstream>
 
 namespace chat_ui {
+struct ContextSelection {
+    std::string mode="all";
+    std::set<std::string> selected;
+    void Load(const Json& value){
+        if(!value.is_object())return;
+        const auto candidate=value.value("mode",std::string("all"));
+        if(candidate=="none" || candidate=="all" || candidate=="current" || candidate=="selected")mode=candidate;
+        selected.clear();
+        if(value.contains("ids") && value["ids"].is_array())for(const auto& id:value["ids"])if(id.is_string())selected.insert(id.get<std::string>());
+    }
+    Json Save() const {return {{"mode",mode},{"ids",selected}};}
+    Json Request(const std::string& current) const {
+        return {{"context_mode",mode},{"doc_ids",mode=="current" ? (current.empty()?Json::array():Json::array({current})) : mode=="selected" ? Json(selected) : Json()}};
+    }
+    std::string Label() const {
+        return "Источники: "+(mode=="none"?std::string("Без законов"):mode=="current"?std::string("Текущий закон"):mode=="selected"?"Выбранные · "+std::to_string(selected.size()):std::string("Вся база"));
+    }
+};
+inline bool MatchesTitle(const std::string& title,const std::string& query){
+    auto value=notebook::Decode(title),needle=notebook::Decode(query);
+    for(auto& c:value)c=notebook::Fold(c);for(auto& c:needle)c=notebook::Fold(c);
+    return value.find(needle)!=std::u32string::npos;
+}
+inline Json ContextHistory(const Json& messages,const Json& context){
+    Json history=Json::array();
+    for(const auto& message:messages)if(message.value("status","")=="complete" && message.value("context",Json())==context)
+        history.push_back({{"role",message["role"]},{"content",message["content"]}});
+    return history;
+}
 struct Run {std::string text,label;bool bold=false,code=false;};
 struct Block {std::string text;bool heading=false,code=false;std::vector<std::vector<std::string>> rows;};
 inline std::string Trim(std::string s){auto a=s.find_first_not_of(" \t\r\n");auto b=s.find_last_not_of(" \t\r\n");return a==std::string::npos?"":s.substr(a,b-a+1);}
@@ -125,18 +157,77 @@ inline float Markdown(const std::vector<Block>& blocks,float width,bool draw,con
     ImGui::SetCursorScreenPos(start);return std::max(ImGui::GetFontSize(),y);
 }
 
-struct Actions {bool send=false,stop=false,clear=false;Json citation=Json::object();};
+struct Actions {bool send=false,stop=false,clear=false,contextChanged=false;Json citation=Json::object();};
 class Panel {
     struct Cached {std::string text;std::vector<Block> blocks;float width=0,font=0,height=0;};
     std::map<std::string,Cached> cache;
     bool follow=true,forceBottom=true,focus=false;
     std::string previousTail;
+    std::set<std::string> draftSelection;
+    char lawFilter[256]{};
+    bool openSelection=false;
+    void DrawContext(const Json& documents,bool busy,Actions& action){
+        ImGui::BeginDisabled(busy);
+        const auto label=context.Label();
+        const float width=ImGui::GetContentRegionAvail().x;
+        const char* labelEnd=nullptr;
+        ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(),std::max(ui::Px(20),width-ui::Px(76)),0,label.c_str(),nullptr,&labelEnd);
+        const auto visibleLabel=labelEnd && *labelEnd?std::string(label.c_str(),labelEnd)+"…":label;
+        if(ui::Button("chat-context",visibleLabel.c_str(),ui::Icon::Book,width))ImGui::OpenPopup("chat-context-menu");
+        const auto end=ImGui::GetItemRectMax();const auto start=ImGui::GetItemRectMin();
+        auto* draw=ImGui::GetWindowDrawList();const float x=end.x-ui::Px(16),y=(start.y+end.y)*.5f;
+        draw->AddLine(ImVec2(x-ui::Px(4),y-ui::Px(2)),ImVec2(x,y+ui::Px(2)),ui::Color(ImGuiCol_TextDisabled),ui::Px(1.5f));
+        draw->AddLine(ImVec2(x,y+ui::Px(2)),ImVec2(x+ui::Px(4),y-ui::Px(2)),ui::Color(ImGuiCol_TextDisabled),ui::Px(1.5f));
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",label.c_str(),context.mode=="none"?"Обычный ИИ-чат без подключения базы законов.":"Законы передаются целиком. При превышении бюджета запрос не отправляется.");
+        if(ui::Dropdown("chat-context-menu",ImVec2(start.x,end.y+ui::Px(4)))){
+            for(const auto& option:std::vector<std::pair<std::string,std::string>>{{"none","Без законов"},{"all","Вся база"},{"current","Текущий закон"},{"selected","Выбранные законы…"}}){
+                if(ImGui::MenuItem(option.second.c_str(),nullptr,context.mode==option.first)){
+                    if(option.first=="selected"){draftSelection=context.selected;lawFilter[0]=0;openSelection=true;}
+                    else if(context.mode!=option.first){context.mode=option.first;action.contextChanged=true;}
+                }
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::EndDisabled();
+        if(openSelection){ImGui::OpenPopup("Выбрать законы###chat-law-selection");openSelection=false;}
+        const auto screen=ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowSize(ImVec2(std::min(ui::Px(640),screen.x-ui::Px(24)),std::min(ui::Px(540),screen.y-ui::Px(24))),ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(ImVec2(screen.x*.5f,screen.y*.5f),ImGuiCond_Appearing,ImVec2(.5f,.5f));
+        bool opened=true;
+        if(ImGui::BeginPopupModal("Выбрать законы###chat-law-selection",&opened,ImGuiWindowFlags_NoResize)){
+            ui::Text("Передаются полные тексты. Выбор сохраняется между запусками.",.9f,false,ImGuiCol_TextDisabled);
+            ImGui::SetNextItemWidth(-1);ImGui::InputTextWithHint("##law-filter","Найти закон…",lawFilter,sizeof(lawFilter));
+            if(ImGui::Button("Выбрать все"))for(const auto& doc:documents)draftSelection.insert(doc.value("id",""));
+            ImGui::SameLine();if(ImGui::Button("Снять выбор"))draftSelection.clear();
+            ui::Text("Выбрано: "+std::to_string(draftSelection.size()),.9f);
+            ImGui::BeginChild("law-choices",ImVec2(0,-ui::Px(66)),ImGuiChildFlags_Borders);
+            std::set<std::string> available;unsigned shown=0;
+            auto row=[&](const std::string& id,const std::string& title){
+                if(!MatchesTitle(title,lawFilter))return;
+                ++shown;ImGui::PushID(id.c_str());bool checked=draftSelection.count(id)!=0;
+                if(ImGui::Checkbox("##law-chosen",&checked)){if(checked)draftSelection.insert(id);else draftSelection.erase(id);}
+                ImGui::SameLine();ui::Text(title,.95f);ImGui::Spacing();ImGui::PopID();
+            };
+            for(const auto& doc:documents){const auto id=doc.value("id","");available.insert(id);row(id,LawDisplayTitle(doc.value("title","")));}
+            // Keep unavailable IDs explicit; never silently replace them by all laws.
+            const auto selectedCopy=draftSelection;
+            for(const auto& id:selectedCopy)if(!available.count(id))row(id,"Недоступный закон: "+id);
+            if(!shown)ui::Text(documents.empty()?"В базе пока нет законов.":"Ничего не найдено.",.9f,false,ImGuiCol_TextDisabled);
+            ImGui::EndChild();
+            ImGui::BeginDisabled(draftSelection.empty());
+            if(ImGui::Button("Применить")){context.mode="selected";context.selected=draftSelection;action.contextChanged=true;ImGui::CloseCurrentPopup();}
+            ImGui::EndDisabled();ImGui::SameLine();
+            if(ImGui::Button("Отмена") || ImGui::IsKeyPressed(ImGuiKey_Escape))ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+    }
 public:
-    bool onlyCurrent=false;
+    ContextSelection context;
     ImVec2 sendCenter{};
     float composerBottom=0;
     void Focus(){focus=true;forceBottom=true;}
-    Actions Draw(const Json& messages,char* question,size_t capacity,bool busy,bool stopping,bool ready,const std::string& error){
+    void PreviewSelection(){draftSelection=context.selected;openSelection=true;}
+    Actions Draw(const Json& messages,char* question,size_t capacity,bool busy,bool stopping,bool ready,const std::string& error,const Json& documents=Json::array()){
         Actions action;const float scale=ui::Scale(),width=ImGui::GetContentRegionAvail().x;
         const float top=ImGui::GetCursorPosY();ui::Text("ИИ-помощник",1.18f,true,ImGuiCol_Text,std::max(ui::Px(40),width-ui::Px(48)));
         ImGui::SameLine();ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-ui::Px(32),top));
@@ -146,7 +237,7 @@ public:
             if(ImGui::MenuItem("Очистить диалог"))action.clear=true;ImGui::EndPopup();
         }
         ImGui::SetCursorPosY(top+ui::Px(44));
-        ui::Toggle("##current-law",&onlyCurrent);ImGui::SameLine();ui::Text("Только текущий закон",.83f);
+        DrawContext(documents,busy,action);
         const float inputWidth=std::max(ui::Px(60),width-ui::Px(72));
         const float lines=ImGui::CalcTextSize(question,nullptr,false,inputWidth).y;
         const float composerHeight=std::clamp(lines+ui::Px(24),ui::Px(48),ui::Px(120));
@@ -155,8 +246,8 @@ public:
         follow=ImGui::GetScrollY()>=ImGui::GetScrollMaxY()-ui::Px(20);
         if(messages.empty()){
             cache.clear();
-            ui::Text(ready?"Задайте вопрос по законам":error.empty()?"Загружаем локальную историю…":"Чат недоступен",1.f,true);
-            ui::Text("Например: что такое 51 УК?",.9f,false,ImGuiCol_TextDisabled);
+            ui::Text(ready?(context.mode=="none"?"Начните разговор":"Задайте вопрос по законам"):error.empty()?"Загружаем локальную историю…":"Чат недоступен",1.f,true);
+            ui::Text(context.mode=="none"?"База законов не подключена.":"Например: что такое 51 УК?",.9f,false,ImGuiCol_TextDisabled);
         }
         std::string tail;
         for(const auto& message:messages){
@@ -201,7 +292,7 @@ public:
         if(focus && ready){ImGui::SetKeyboardFocusHere();focus=false;}
         const auto inputAt=ImGui::GetCursorScreenPos();
         if(ImGui::InputTextMultiline("##question",question,capacity,ImVec2(field,composerHeight-ui::Px(12)),ImGuiInputTextFlags_EnterReturnsTrue) && !busy)action.send=true;
-        if(!question[0]){auto* draw=ImGui::GetWindowDrawList();draw->PushClipRect(inputAt,ImVec2(inputAt.x+field,inputAt.y+composerHeight),true);draw->AddText(ImVec2(inputAt.x+ui::Px(4),inputAt.y+ui::Px(4)),ui::Color(ImGuiCol_TextDisabled),"Спросить о законе…");draw->PopClipRect();}
+        if(!question[0]){auto* draw=ImGui::GetWindowDrawList();draw->PushClipRect(inputAt,ImVec2(inputAt.x+field,inputAt.y+composerHeight),true);draw->AddText(ImVec2(inputAt.x+ui::Px(4),inputAt.y+ui::Px(4)),ui::Color(ImGuiCol_TextDisabled),context.mode=="none"?"Написать сообщение…":"Спросить о законе…");draw->PopClipRect();}
         ImGui::EndDisabled();ImGui::PopStyleColor();ImGui::PopStyleVar(2);
         ImGui::SameLine();ImGui::SetCursorPosY((composerHeight-ui::Px(34))*.5f);
         const auto pos=ImGui::GetCursorScreenPos();const float diameter=ui::Px(34);

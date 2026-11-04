@@ -56,6 +56,15 @@ def main():
             else:
                 raise AssertionError("A late chat write restored cleared history")
             print("PORTABLE CHAT: PASS; private history, atomic clear and stale-write protection")
+            assert health.get("full_ai_context"), "Update backend for full-document source selection"
+            assert rpc("ai_context", {"context_mode": "none"}) == {"documents": 0, "context_chars": 0}
+            try:
+                rpc("ai_context", {"context_mode": "selected", "doc_ids": []})
+            except RuntimeError as error:
+                assert "Выберите" in str(error)
+            else:
+                raise AssertionError("An empty selection must not silently select all laws")
+            print("PORTABLE AI CONTEXT: PASS; plain chat and explicit selection, no paid API calls")
             assert health.get("notes"), "Update the backend for notebook support"
             notes_root = Path(directory) / "Личные заметки"
             rpc("settings_save", {"notes_dir": str(notes_root)})

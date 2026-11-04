@@ -4,6 +4,7 @@
 #include <fstream>
 #include <vector>
 #include <cmath>
+#include <cstdio>
 
 void Capture(IDirect3DDevice9* device, const wchar_t* suffix=L"") {
     wchar_t path[32768]{};
@@ -49,7 +50,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     if (!d3d) return 1;
     D3DPRESENT_PARAMETERS parameters{}; parameters.Windowed = TRUE; parameters.SwapEffect = D3DSWAPEFFECT_DISCARD; parameters.hDeviceWindow = window;
     IDirect3DDevice9* device = nullptr;
-    if (FAILED(d3d->CreateDevice(0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, &device))) return 2;
+    const auto created=d3d->CreateDevice(0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, &device);
+    if (FAILED(created)) {std::fprintf(stderr,"D3D9 test host cannot create a device (HRESULT 0x%08lX).\n",static_cast<unsigned long>(created));return 2;}
     HMODULE library = LoadLibraryW(L"AmazingLawClient.dll");
     if (!library) return 3;
     using Probe = unsigned(__cdecl*)();
