@@ -42,7 +42,8 @@ def main():
     bundle = output / "portable-build/AmazingHelper"
     if not args.skip_freeze:
         run(sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed",
-            "--name", "AmazingHelper", "--specpath", ".cache/build/spec", "--distpath", ".cache/dist/portable-build",
+            "--name", "AmazingHelper", "--icon", ROOT / "amazing_overlay/assets/amazing-helper.ico",
+            "--specpath", ".cache/build/spec", "--distpath", ".cache/dist/portable-build",
             "--workpath", ".cache/build/portable-build", "--collect-all", "playwright", "--collect-all", "bs4",
             "--collect-all", "openai", "--collect-all", "dotenv", "--exclude-module", "PySide6.QtWebEngineCore",
             "--add-data", str(ROOT / "amazing_overlay/assets") + ";amazing_overlay/assets",

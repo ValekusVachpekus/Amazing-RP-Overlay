@@ -40,7 +40,10 @@ def main():
         app.aboutToQuit.connect(backend.close)
     else:
         from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QIcon
+        from pathlib import Path
         app = QApplication(sys.argv)
+        app.setWindowIcon(QIcon(str(Path(__file__).with_name("assets") / "amazing-helper.ico")))
         desktop = args.mode in ("launcher", "manager")
         lock = QLockFile(str(DATA / (("launcher" if desktop else args.mode) + ".lock")))
         lock.setStaleLockTime(0)

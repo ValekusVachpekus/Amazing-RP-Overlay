@@ -8,6 +8,7 @@
   #define OutputDir "..\.cache\dist"
 #endif
 [Setup]
+SetupIconFile=..\amazing_overlay\assets\amazing-helper.ico
 AppId={{5F1B31C4-08A8-4AE1-9DCD-E62A20280001}
 AppName=AmazingHelper
 AppVersion={#AppVersion}
