@@ -9,4 +9,9 @@ struct DocumentSearch {
     int active = 0, total = 0, cursor = 0;
     bool jump = false;
 };
-void DrawDocument(const Json& document, DocumentSearch* search = nullptr);
+struct DocumentJump {
+    std::string doc_id,post_id,text;
+    int occurrence=0;
+    bool pending=false,found=false;
+};
+void DrawDocument(const Json& document, DocumentSearch* search = nullptr,DocumentJump* target=nullptr);

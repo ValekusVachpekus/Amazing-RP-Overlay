@@ -36,6 +36,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    overload,
 )
 from urllib.parse import ParseResult, urljoin, urlparse, urlunparse
 
@@ -52,7 +53,7 @@ from playwright._impl._greenlets import RouteGreenlet
 from playwright._impl._str_utils import escape_regex_flags
 
 if TYPE_CHECKING:  # pragma: no cover
-    from playwright._impl._api_structures import HeadersArray
+    from playwright._impl._internal_structures import HeadersArray
     from playwright._impl._network import Request, Response, Route, WebSocketRoute
 
 URLMatch = Union[str, Pattern[str], Callable[[str], bool]]
@@ -128,7 +129,7 @@ class ParsedMessageParams(TypedDict):
 
 
 class ParsedMessagePayload(TypedDict, total=False):
-    id: int
+    id: str
     guid: str
     method: str
     params: ParsedMessageParams
@@ -589,6 +590,20 @@ TEXTUAL_MIME_TYPE = re.compile(
 
 def is_textual_mime_type(mime_type: str) -> bool:
     return bool(TEXTUAL_MIME_TYPE.match(mime_type))
+
+
+@overload
+def to_milliseconds(value: Union[float, datetime.timedelta]) -> float: ...
+
+
+@overload
+def to_milliseconds(value: None) -> None: ...
+
+
+@overload
+def to_milliseconds(
+    value: Union[float, datetime.timedelta, None],
+) -> Optional[float]: ...
 
 
 def to_milliseconds(

@@ -13,7 +13,7 @@ RELEASE = ROOT / "Release"
 MANIFEST = "manifest.json"
 REQUIRED = (
     "start.bat",
-    "AmazingLawOverlay.exe", "AmazingLawClient.dll", "AmazingLawClient.asi",
+    "AmazingHelper.exe", "AmazingLawClient.dll", "AmazingLawClient.asi", "AmazingHelperInjector.exe",
     "start_manager.bat", "start_backend.bat", "start_overlay.bat",
     "start_install-browser.bat",
 )
@@ -87,7 +87,7 @@ def publish(bundle):
         for relative, path in files_in(directory).items():
             sources[f"{name}/{relative}"] = path
     sources["README.md"] = ROOT / "docs" / "RELEASE.md"
-    for name in ("V2.md", "PROTOCOL.md", "GAME_ACCEPTANCE.md", "NOTEBOOK.md"):
+    for name in ("V2.md", "PROTOCOL.md", "GAME_ACCEPTANCE.md", "NOTEBOOK.md", "DISTRIBUTION.md"):
         sources[f"docs/{name}"] = ROOT / "docs" / name
     entries = {}
     for name, source in sorted(sources.items()):
@@ -124,7 +124,8 @@ def publish(bundle):
     for path in stale:
         path.unlink(missing_ok=True)
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    manifest = {"format": 1, "source_revision": revision, "files": entries}
+    version = json.loads((ROOT / "amazing_overlay/version.json").read_text(encoding="utf-8"))["version"]
+    manifest = {"format": 1, "version": version, "source_revision": revision, "files": entries}
     (RELEASE / MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     verify()
 

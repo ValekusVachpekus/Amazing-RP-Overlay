@@ -3,17 +3,19 @@ from __future__ import annotations
 import html
 import json
 import sys
+from datetime import datetime
 
-from PySide6.QtCore import QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation
+from PySide6.QtCore import QByteArray, QEvent, QPoint, QProcess, QProcessEnvironment, QTimer, Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation, Signal
 from PySide6.QtGui import QAction, QFont, QIcon, QTextCursor
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                               QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
                               QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-                              QPushButton, QSizeGrip, QSpinBox, QSplitter, QStyle, QSystemTrayIcon,
+                              QPushButton, QScrollArea, QSizeGrip, QSpinBox, QSplitter, QStyle, QSystemTrayIcon,
                               QTabWidget, QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit,
                               QVBoxLayout, QWidget)
 
 from .documents import chunks
+from .desktop import AUTHOR, action, heading, label, open_folder, setup_desktop
 from .settings import ROOT, DEFAULTS
 from .browsers import configure_browser_environment
 from .transport import background, ensure_backend, rpc
@@ -83,8 +85,8 @@ class BrowserInstaller(QMainWindow):
 
 
 class RemoteWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.work = set()
         self.jobs = {}
         self.polling = False
@@ -158,15 +160,64 @@ class RemoteWindow(QMainWindow):
 
 
 class ManagerWindow(RemoteWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Amazing • Управление базой и настройками")
-        self.resize(1060, 760)
+    settings_saved = Signal(dict)
+
+    def __init__(self, parent=None, embedded=False):
+        super().__init__(parent)
+        self.embedded = embedded
+        if embedded:
+            from .launcher_presentation import STYLE as manager_style
+            self.setWindowFlags(Qt.Widget)
+            self.setStyleSheet(manager_style)
+        else:
+            setup_desktop(self)
+        self.setWindowTitle("Amazing • Управление базой и настройками • " + AUTHOR)
+        if not embedded:
+            self.resize(1320, 840)
+            self.setMinimumSize(1040, 620)
+        self.data_dir = None
+        self.header_ready = False
         root = QWidget()
-        layout = QVBoxLayout(root)
+        root.setObjectName("desktopRoot")
+        outer = QHBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(214)
+        nav = QVBoxLayout(sidebar)
+        nav.setContentsMargins(16, 24, 16, 20)
+        nav.setSpacing(8)
+        nav.addWidget(label("AMAZING", "sectionTitle"))
+        nav.addWidget(label("Управление базой", "subtitle"))
+        nav.addSpacing(24)
+        self.nav_buttons = []
+        for index, (title, icon) in enumerate((("Источники", QStyle.SP_FileDialogDetailedView),
+                                               ("Обновление", QStyle.SP_BrowserReload),
+                                               ("ИИ / API", QStyle.SP_MessageBoxInformation),
+                                               ("Оформление и клавиши", QStyle.SP_ComputerIcon),
+                                               ("Диагностика", QStyle.SP_FileDialogInfoView))):
+            item = action(title, lambda checked=False, i=index: self.tabs.setCurrentIndex(i), nav,
+                          "nav", self.style().standardIcon(icon))
+            item.setCheckable(True)
+            item.setAutoExclusive(True)
+            self.nav_buttons.append(item)
+        nav.addStretch()
+        action("Папка законов", self.open_laws, nav, icon=self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        nav.addWidget(label(AUTHOR))
+        outer.addWidget(sidebar)
+        sidebar.setVisible(not embedded)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(*((0, 0, 0, 0) if embedded else (22, 22, 22, 14)))
+        layout.setSpacing(14)
         self.tabs = QTabWidget()
+        self.tabs.tabBar().hide()
+        self.tabs.currentChanged.connect(self.select_section)
         layout.addWidget(self.tabs)
+        self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        outer.addWidget(content, 1)
         self.setCentralWidget(root)
         self.preview_id = None
         self.source_values = []
@@ -176,57 +227,160 @@ class ManagerWindow(RemoteWindow):
         self.make_ai()
         self.make_appearance()
         self.make_diagnostics()
-        self.task(lambda: (ensure_backend(), rpc("settings"), rpc("sources")), self.ready)
+        self.header_timer = QTimer(self)
+        self.header_timer.setSingleShot(True)
+        self.header_timer.setInterval(500)
+        self.header_timer.timeout.connect(self.save_header)
+        self.sources.horizontalHeader().sectionResized.connect(self.header_changed)
+        self.select_section(0)
+        self.retry_button = action("Повторить подключение", self.connect_backend, layout)
+        self.retry_button.hide()
+        self.connect_backend()
+
+    def connect_backend(self):
+        self.retry_button.hide()
+        self.tabs.setEnabled(False)
+        self.status.setText("Подключение к бэкенду…")
+        self.task(lambda: (ensure_backend(), rpc("settings"), rpc("sources"),
+                           rpc("state_get", {"key": "desktop-sources-header", "default": ""})), self.ready)
+
+    def error(self, message):
+        super().error(message)
+        if not self.header_ready:
+            self.retry_button.show()
+
+    def row(self):
+        if self.embedded:
+            from .launcher_presentation import FlowLayout
+            return FlowLayout()
+        return QHBoxLayout()
+
+    def select_section(self, index):
+        for i, item in enumerate(self.nav_buttons):
+            item.setChecked(i == index)
 
     def tab(self, title):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, title)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(widget)
+        self.tabs.addTab(scroll, title)
         return layout
 
     def make_sources(self):
         layout = self.tab("Источники")
-        controls = QHBoxLayout()
-        button("Добавить / предпросмотр", self.add_source, controls)
-        button("Изменить", self.edit_source, controls)
-        button("Импорт urls.txt", self.import_urls, controls)
-        button("Экспорт ссылок", self.export_urls, controls)
-        button("Вкл / выкл", self.enable_source, controls)
-        button("Удалить ссылку", self.delete_source, controls)
+        heading(layout, "Источники законов", "Добавляйте темы форума, проверяйте документы и управляйте обновлениями.")
+        controls = self.row()
+        action("Добавить источник", self.add_source, controls, "primary")
+        action("Импорт ссылок…", self.import_urls, controls)
+        action("Экспорт ссылок…", self.export_urls, controls)
+        controls.addStretch()
+        action("Обновить список", self.refresh_sources, controls)
         layout.addLayout(controls)
+        self.source_filter = QLineEdit()
+        self.source_filter.setPlaceholderText("Найти источник по названию или ссылке…")
+        self.source_filter.setClearButtonEnabled(True)
+        self.source_filter.textChanged.connect(self.filter_sources)
+        layout.addWidget(self.source_filter)
         self.sources = QTableWidget(0, 5)
-        self.sources.setHorizontalHeaderLabels(["Вкл", "Название / ID", "Ссылка", "Обновлено", "Состояние"])
+        self.sources.setHorizontalHeaderLabels(["Вкл.", "Название закона", "Ссылка на тему", "Обновлено", "Состояние"])
         self.sources.setSelectionBehavior(QTableWidget.SelectRows)
         self.sources.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.sources.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.sources.setAlternatingRowColors(True)
+        self.sources.setShowGrid(False)
+        self.sources.setWordWrap(False)
+        self.sources.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
+        self.sources.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
+        self.sources.verticalHeader().hide()
+        self.sources.verticalHeader().setDefaultSectionSize(46)
+        header = self.sources.horizontalHeader()
+        # Every divider controls its own left column. Stretch modes make a drag
+        # redistribute widths in surprising ways, especially the last column.
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setMinimumSectionSize(64)
+        for index, width in enumerate((64, 320, 290, 166, 170)):
+            header.resizeSection(index, width)
+        header.setToolTip("Потяните правую границу заголовка, чтобы изменить ширину этой колонки. Внизу есть горизонтальная прокрутка.")
         self.sources.itemDoubleClicked.connect(lambda _: self.preview_selected())
-        layout.addWidget(self.sources)
-        line = QHBoxLayout()
-        button("Предпросмотр выбранного", self.preview_selected, line)
-        button("История версий", self.show_versions, line)
-        button("Обновить список", self.refresh_sources, line)
+        self.sources.itemSelectionChanged.connect(self.update_source_actions)
+        layout.addWidget(self.sources, 1)
+        line = self.row()
+        self.source_actions = [action("Предпросмотр", self.preview_selected, line),
+                               action("Изменить…", self.edit_source, line),
+                               action("Вкл. / выкл.", self.enable_source, line),
+                               action("Версии", self.show_versions, line)]
+        line.addStretch()
+        self.source_actions.append(action("Удалить", self.delete_source, line, "danger"))
         layout.addLayout(line)
+        self.source_count = label("Нет источников. Добавьте ссылку или импортируйте urls.txt.")
+        layout.addWidget(self.source_count)
+        self.update_source_actions()
+
+    def update_source_actions(self):
+        enabled = bool(self.selected_ids())
+        for item in getattr(self, "source_actions", []):
+            item.setEnabled(enabled)
+
+    def filter_sources(self):
+        query = self.source_filter.text().strip().casefold()
+        count = 0
+        for row, source in enumerate(self.source_values):
+            hidden = query not in ((source.get("title") or "") + " " + source["url"] + " " + source["id"]).casefold()
+            self.sources.setRowHidden(row, hidden)
+            if hidden:
+                for col in range(self.sources.columnCount()):
+                    self.sources.item(row, col).setSelected(False)
+            count += not hidden
+        self.source_count.setText(f"Показано {count} из {len(self.source_values)} • Двойной клик — предпросмотр документа")
+
+    def header_changed(self, *_):
+        if self.header_ready:
+            self.header_timer.start()
+
+    def save_header(self):
+        state = bytes(self.sources.horizontalHeader().saveState().toBase64()).decode("ascii")
+        self.call("state_set", {"key": "desktop-sources-header", "value": state})
+
+    def open_laws(self):
+        if not self.data_dir:
+            return self.error("Подождите подключения к бэкенду.")
+        try:
+            open_folder(self.data_dir)
+        except OSError as exc:
+            self.error(str(exc))
 
     def make_updates(self):
         layout = self.tab("Обновление")
-        layout.addWidget(QLabel("Обновление выполняется в отдельном процессе. Ошибка темы сохраняет предыдущую версию."))
+        heading(layout, "Обновление базы", "Загрузка идёт в фоне. При ошибке сохраняется последняя успешная версия закона.")
         self.visible_browser = QCheckBox("Открыть браузер для ручной проверки сайта (может переключить фокус игры)")
         layout.addWidget(self.visible_browser)
-        controls = QHBoxLayout()
-        button("Обновить выбранные", lambda: self.update(False), controls)
-        button("Обновить все включённые", lambda: self.update(True), controls)
-        button("Отменить задачи", self.cancel_jobs, controls)
-        button("Экспорт laws/", self.export_documents, controls)
-        button("Установить Chromium", self.install_browser, controls)
+        controls = self.row()
+        action("Обновить выбранные", lambda: self.update(False), controls, "primary")
+        action("Все включённые", lambda: self.update(True), controls)
+        action("Отменить задачи", self.cancel_jobs, controls, "danger")
+        controls.addStretch()
         layout.addLayout(controls)
+        tools = self.row()
+        action("Экспорт законов в TXT/JSON…", self.export_documents, tools)
+        action("Установить Chromium", self.install_browser, tools)
+        tools.addStretch()
+        layout.addLayout(tools)
         self.update_log = QTextEdit()
         self.update_log.setReadOnly(True)
+        self.update_log.setPlaceholderText("Здесь появятся ход загрузки, номера страниц и результаты обновления.")
         layout.addWidget(self.update_log)
         self.last_progress = ""
 
     def make_ai(self):
         layout = self.tab("ИИ")
+        heading(layout, "ИИ и подключение к API", "Настройте провайдера и модель. Ключ хранится отдельно от программы.")
         form = QFormLayout()
+        form.setSpacing(16)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.provider = QComboBox()
         self.provider.addItem("OpenRouter / OpenAI-compatible", "openai")
         self.provider.addItem("Gemini", "gemini")
@@ -247,17 +401,22 @@ class ManagerWindow(RemoteWindow):
         self.env_label = QLabel()
         self.env_label.setWordWrap(True)
         layout.addWidget(self.env_label)
-        controls = QHBoxLayout()
-        button("Сохранить", self.save_settings, controls)
-        button("Проверить сохранённое соединение", self.test_ai, controls)
+        controls = self.row()
+        action("Сохранить настройки", self.save_settings, controls, "primary")
+        action("Проверить сохранённое соединение", self.test_ai, controls)
+        controls.addStretch()
         layout.addLayout(controls)
         self.ai_result = QTextEdit()
         self.ai_result.setReadOnly(True)
+        self.ai_result.setPlaceholderText("Результат проверки: провайдер, фактически выбранная модель, ответ или понятная ошибка API.")
         layout.addWidget(self.ai_result)
 
     def make_appearance(self):
         layout = self.tab("Оформление и клавиши")
+        heading(layout, "Оформление и клавиши", "Общие настройки ридера и блокнота для внутриигрового и обычного оверлея.")
         form = QFormLayout()
+        form.setSpacing(14)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         for key, title in (("toggle_hotkey", "Показать / скрыть"), ("input_hotkey", "Переключить ввод"),
                            ("notes_hotkey", "Блокнот / новая заметка"),
                            ("prev_law_hotkey", "Предыдущий закон"), ("next_law_hotkey", "Следующий закон"),
@@ -273,32 +432,56 @@ class ManagerWindow(RemoteWindow):
         opacity.setSingleStep(0.05)
         self.inputs["opacity"] = opacity
         form.addRow("Прозрачность", opacity)
+        self.theme = QComboBox()
+        self.theme.addItem("Тёмная", "dark")
+        self.theme.addItem("Светлая", "light")
+        form.addRow("Тема оверлея", self.theme)
+        self.animations = QCheckBox("Плавное появление и скрытие (0,2 с)")
+        form.addRow("Анимация", self.animations)
         self.inputs["notes_dir"] = QLineEdit()
         self.inputs["notes_dir"].setPlaceholderText("По умолчанию: Notes рядом с проектом / программой")
         form.addRow("Папка заметок (полный путь)", self.inputs["notes_dir"])
         layout.addLayout(form)
-        layout.addWidget(QLabel("Esc: ввод → просмотр → скрыть. Alt+↑/↓: прокрутка в режиме просмотра.\nПосле изменения клавиш перезапустите клиент."))
-        button("Сохранить", self.save_settings, layout)
-        button("Запустить внешний оверлей", self.launch_overlay, layout)
+        layout.addWidget(label("Esc: ввод → просмотр → скрыть. Для обычного оверлея изменение горячих клавиш требует перезапуска клиента."))
+        controls = self.row()
+        action("Сохранить настройки", self.save_settings, controls, "primary")
+        action("Запустить обычный оверлей", self.launch_overlay, controls)
+        controls.addStretch()
+        layout.addLayout(controls)
         layout.addStretch()
 
     def make_diagnostics(self):
         layout = self.tab("Диагностика")
-        button("Обновить диагностику", lambda: self.call("health", done=self.show_health), layout)
-        button("Проверить запуск Chromium", lambda: self.start_job("browser_check", done=self.show_health), layout)
+        heading(layout, "Диагностика", "Версия сервиса, состояние базы и проверка браузера парсера.")
+        controls = self.row()
+        action("Обновить состояние", lambda: self.call("health", done=self.show_health), controls, "primary")
+        action("Проверить Chromium", lambda: self.start_job("browser_check", done=self.show_health), controls)
+        controls.addStretch()
+        layout.addLayout(controls)
         self.diagnostics = QTextEdit()
         self.diagnostics.setReadOnly(True)
         layout.addWidget(self.diagnostics)
 
     def show_health(self, value):
+        if value.get("data_dir"):
+            self.data_dir = value["data_dir"]
         self.diagnostics.setPlainText(json.dumps(value, ensure_ascii=False, indent=2))
 
     def ready(self, values):
-        health, settings, sources = values
+        health, settings, sources, header_state = values
         self.show_health(health)
         self.apply_settings(settings)
         self.show_sources(sources)
-        self.status.setText("Бэкенд подключён. Ключи и данные хранятся отдельно у каждого пользователя.")
+        if isinstance(header_state, str) and len(header_state) < 10000:
+            header = self.sources.horizontalHeader()
+            header.restoreState(QByteArray.fromBase64(header_state.encode("ascii", errors="ignore")))
+            # Enforce independent resizing even if a prior state used Stretch.
+            header.setStretchLastSection(False)
+            header.setSectionResizeMode(QHeaderView.Interactive)
+        self.header_ready = True
+        self.tabs.setEnabled(True)
+        self.retry_button.hide()
+        self.status.setText(f"Бэкенд подключён • версия {health['app_version']} • законов: {health['documents']}")
 
     def apply_settings(self, values):
         for key, field in self.inputs.items():
@@ -309,12 +492,16 @@ class ManagerWindow(RemoteWindow):
             else:
                 field.setValue(values.get(key, 15))
         self.provider.setCurrentIndex(max(0, self.provider.findData(values.get("ai_provider"))))
+        self.theme.setCurrentIndex(max(0, self.theme.findData(values.get("theme", "dark"))))
+        self.animations.setChecked(values.get("animations", True))
         self.env_label.setText("Ключ: " + ("настроен" if values.get("has_api_key") else "не задан") +
                                ". Переопределения из окружения/.env: " + (", ".join(values.get("env_overrides", [])) or "нет"))
 
     def save_settings(self):
         values = {key: field.text() if isinstance(field, QLineEdit) else field.value() for key, field in self.inputs.items()}
         values["ai_provider"] = self.provider.currentData()
+        values["theme"] = self.theme.currentData()
+        values["animations"] = self.animations.isChecked()
         try:
             bindings = [parse_hotkey(value) for key, value in values.items() if key.endswith("_hotkey")]
             if len(set(bindings)) != len(bindings) or any(value[1] == 27 for value in bindings):
@@ -322,19 +509,43 @@ class ManagerWindow(RemoteWindow):
         except ValueError as exc:
             self.error(str(exc))
             return
-        self.call("settings_save", values, lambda result: (self.apply_settings(result), self.status.setText("Настройки сохранены")))
+        def saved(result):
+            self.apply_settings(result)
+            self.status.setText("Настройки сохранены")
+            self.settings_saved.emit(result)
+        self.call("settings_save", values, saved)
 
     def show_sources(self, values):
+        selected = set(self.selected_ids())
         self.source_values = values
+        self.sources.blockSignals(True)
+        self.sources.clearSelection()
         self.sources.setRowCount(len(values))
         for row, source in enumerate(values):
-            for col, text in enumerate(("✓" if source["enabled"] else "—", source["title"] or source["id"], source["url"], source.get("updated") or "—", source["status"])):
+            title = " ".join((source["title"] or source["id"]).replace("\ufeff", "").replace("\u200b", "").replace("\u2800", " ").split())
+            for prefix in ("ЗАКРЕПЛЕНО ", "ИНФОРМАЦИЯ "):
+                title = title.removeprefix(prefix)
+            updated = source.get("updated") or "—"
+            try:
+                updated = datetime.fromisoformat(updated.replace("Z", "+00:00")).astimezone().strftime("%d.%m.%Y %H:%M")
+            except ValueError:
+                pass
+            status = source["status"] or ("Локальная копия" if source.get("updated") else "Не загружен")
+            for col, text in enumerate(("Да" if source["enabled"] else "Нет", title, source["url"], updated, status)):
                 item = QTableWidgetItem(str(text))
                 item.setData(Qt.UserRole, source["id"])
+                item.setToolTip(str(source.get("updated") or "Не обновлялся") if col == 3 else str(text))
+                if col == 0:
+                    item.setTextAlignment(Qt.AlignCenter)
                 self.sources.setItem(row, col, item)
+                if source["id"] in selected:
+                    item.setSelected(True)
+        self.sources.blockSignals(False)
+        self.filter_sources()
+        self.update_source_actions()
 
     def selected_ids(self):
-        return sorted({self.sources.item(item.row(), 0).data(Qt.UserRole) for item in self.sources.selectedItems()})
+        return sorted({item.data(Qt.UserRole) for item in self.sources.selectedItems() if item.data(Qt.UserRole)})
 
     def refresh_sources(self):
         self.call("sources", done=self.show_sources)
@@ -360,17 +571,7 @@ class ManagerWindow(RemoteWindow):
 
     def preview(self, url, replaces=None):
         def ready(result, job_id):
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Предпросмотр • " + result["document"]["title"])
-            dialog.resize(900, 650)
-            layout = QVBoxLayout(dialog)
-            reader = browser()
-            reader.setHtml(result["html"])
-            layout.addWidget(reader)
-            buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-            buttons.accepted.connect(dialog.accept)
-            buttons.rejected.connect(dialog.reject)
-            layout.addWidget(buttons)
+            dialog = self.preview_dialog(result)
             if dialog.exec() == QDialog.Accepted:
                 self.call("preview_save", {"job_id": job_id, "replaces": replaces}, lambda _: self.refresh_sources())
 
@@ -381,21 +582,40 @@ class ManagerWindow(RemoteWindow):
             self.status.setText("Загрузка предпросмотра…")
         self.call("preview", {"url": url, "visible": self.visible_browser.isChecked()}, started)
 
+    def preview_dialog(self, result):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Предпросмотр • " + result["document"]["title"])
+        dialog.resize(900, 650)
+        layout = QVBoxLayout(dialog)
+        reader = browser()
+        if self.embedded:
+            from .documents import document_html
+            from .launcher_presentation import DOCUMENT_STYLE
+            reader.setHtml(document_html(result["document"], stylesheet=DOCUMENT_STYLE))
+        else:
+            reader.setHtml(result["html"])
+        layout.addWidget(reader)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Save).setText("Сохранить источник")
+        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return dialog
+
     def import_urls(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Импорт ссылок", str(ROOT / "urls.txt"), "Текст (*.txt)")
+        path, _ = QFileDialog.getOpenFileName(self, "Импорт ссылок", str(ROOT / "local" / "urls.txt"), "Текст (*.txt)")
         if path:
             from pathlib import Path
-            try:
-                text = Path(path).read_text(encoding="utf-8-sig")
-            except OSError as exc:
-                return self.error(str(exc))
-            self.call("sources_import", {"text": text}, lambda values: (self.refresh_sources(), self.status.setText(f"Ссылок: {len(values)}, ошибок: {sum('error' in v for v in values)}")))
+            self.task(lambda: rpc("sources_import", {"text": Path(path).read_text(encoding="utf-8-sig")}),
+                      lambda values: (self.refresh_sources(), self.status.setText(f"Ссылок: {len(values)}, ошибок: {sum('error' in v for v in values)}")))
 
     def export_urls(self):
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт ссылок", "urls.txt", "Текст (*.txt)")
         if path:
             from .parser import atomic_text
-            self.task(lambda: atomic_text(path, "\n".join(s["url"] for s in self.source_values) + "\n"), lambda _: self.status.setText("Ссылки экспортированы"))
+            text = "\n".join(s["url"] for s in self.source_values) + "\n"
+            self.task(lambda: atomic_text(path, text), lambda _: self.status.setText("Ссылки экспортированы"))
 
     def enable_source(self):
         ids = self.selected_ids()
@@ -451,7 +671,11 @@ class ManagerWindow(RemoteWindow):
         QProcess.startDetached(sys.executable, args, str(ROOT))
 
     def closeEvent(self, event):
+        if self.header_timer.isActive():
+            self.header_timer.stop()
+            self.save_header()
         self.cancel_jobs()
+        self.timer.stop()
         self.closed = True
         super().closeEvent(event)
 
@@ -1128,6 +1352,7 @@ class OverlayWindow(RemoteWindow):
         self.save_state()
         self.cancel_jobs()
         self.hotkeys.clear()
+        QApplication.instance().removeEventFilter(self)
         self.tray.hide()
         self.closed = True
         QApplication.quit()

@@ -37,6 +37,8 @@ struct SettingsPanel {
     std::array<char, 2048> address{}, model{}, key{};
     std::array<char,8192> notesDirectory{};
     std::array<char,80> notesHotkey{};
+    int section=0;
+    std::array<std::array<char,80>,6> hotkeys{};
     void Receive(const Json& settings, bool savedResult = false);
     void Open();
     void Cancel();

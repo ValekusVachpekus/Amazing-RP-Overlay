@@ -18,20 +18,19 @@ import mimetypes
 import pathlib
 import typing
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union, cast
+from typing import Any, Dict, List, Optional, Pattern, Sequence, Union, cast
 
 import playwright._impl._network as network
 from playwright._impl._api_structures import (
     ClientCertificate,
+    Cookie,
     FilePayload,
-    FormField,
-    Headers,
     HttpCredentials,
     ProxySettings,
     RemoteAddr,
     ResourceTiming,
     SecurityDetails,
-    ServerFilePayload,
+    SetCookieParam,
     StorageState,
 )
 from playwright._impl._connection import ChannelOwner, from_channel
@@ -49,8 +48,10 @@ from playwright._impl._helper import (
     object_to_array,
     to_impl,
 )
+from playwright._impl._internal_structures import FormField, Headers, ServerFilePayload
 from playwright._impl._network import (
     serialize_headers,
+    to_clear_cookies_params,
     to_client_certificates_protocol,
     to_http_credentials_protocol,
 )
@@ -135,6 +136,26 @@ class APIRequestContext(ChannelOwner):
     @property
     def tracing(self) -> Tracing:
         return self._tracing
+
+    async def cookies(self, urls: Union[str, Sequence[str]] = None) -> List[Cookie]:
+        if urls is None:
+            urls = []
+        if isinstance(urls, str):
+            urls = [urls]
+        return await self._channel.send("cookies", None, dict(urls=urls))
+
+    async def add_cookies(self, cookies: Sequence[SetCookieParam]) -> None:
+        await self._channel.send("addCookies", None, dict(cookies=cookies))
+
+    async def clear_cookies(
+        self,
+        name: Union[str, Pattern[str]] = None,
+        domain: Union[str, Pattern[str]] = None,
+        path: Union[str, Pattern[str]] = None,
+    ) -> None:
+        await self._channel.send(
+            "clearCookies", None, to_clear_cookies_params(name, domain, path)
+        )
 
     async def delete(
         self,
@@ -331,9 +352,8 @@ class APIRequestContext(ChannelOwner):
             if isinstance(to_impl(urlOrRequest), network.Request)
             else None
         )
-        assert request or isinstance(
-            urlOrRequest, str
-        ), "First argument must be either URL string or Request"
+        if not request and not isinstance(urlOrRequest, str):
+            raise Error("First argument must be either URL string or Request")
         return await self._inner_fetch(
             request,
             url,
@@ -368,15 +388,16 @@ class APIRequestContext(ChannelOwner):
     ) -> "APIResponse":
         if self._close_reason:
             raise TargetClosedError(self._close_reason)
-        assert (
-            (1 if data else 0) + (1 if form else 0) + (1 if multipart else 0)
-        ) <= 1, "Only one of 'data', 'form' or 'multipart' can be specified"
-        assert (
-            maxRedirects is None or maxRedirects >= 0
-        ), "'max_redirects' must be greater than or equal to '0'"
-        assert (
-            maxRetries is None or maxRetries >= 0
-        ), "'max_retries' must be greater than or equal to '0'"
+        if (
+            (1 if data is not None else 0)
+            + (1 if form is not None else 0)
+            + (1 if multipart is not None else 0)
+        ) > 1:
+            raise Error("Only one of 'data', 'form' or 'multipart' can be specified")
+        if maxRedirects is not None and maxRedirects < 0:
+            raise Error("'max_redirects' must be greater than or equal to '0'")
+        if maxRetries is not None and maxRetries < 0:
+            raise Error("'max_retries' must be greater than or equal to '0'")
         url = url or (request.url if request else url)
         method = method or (request.method if request else "GET")
         # Cannot call allHeaders() here as the request may be paused inside route handler.
@@ -394,11 +415,15 @@ class APIRequestContext(ChannelOwner):
                     post_data_buffer = data.encode()
             elif isinstance(data, bytes):
                 post_data_buffer = data
-            elif isinstance(data, (dict, list, int, bool)):
-                json_data = json.dumps(data)
+            elif isinstance(data, (dict, list, int, float, bool)):
+                try:
+                    # NaN and Infinity are not valid JSON.
+                    json_data = json.dumps(data, allow_nan=False)
+                except ValueError as e:
+                    raise Error(str(e)) from None
             else:
                 raise Error(f"Unsupported 'data' type: {type(data)}")
-        elif form:
+        elif form is not None:
             if isinstance(form, FormData):
                 form_data = []
                 for fd_name, fd_value in form._fields:
@@ -408,8 +433,8 @@ class APIRequestContext(ChannelOwner):
                         )
                     form_data.append(NameValue(name=fd_name, value=str(fd_value)))
             else:
-                form_data = object_to_array(form)
-        elif multipart:
+                form_data = object_to_array(form) or []
+        elif multipart is not None:
             multipart_data = []
             if isinstance(multipart, FormData):
                 for fd_name, fd_value in multipart._fields:
@@ -417,18 +442,10 @@ class APIRequestContext(ChannelOwner):
                         await _form_data_field_to_form_field(fd_name, fd_value)
                     )
             else:
-                # Convert file-like values to ServerFilePayload structs.
                 for name, value in multipart.items():
-                    if is_file_payload(value):
-                        payload = cast(FilePayload, value)
-                        assert isinstance(
-                            payload["buffer"], bytes
-                        ), f"Unexpected buffer type of 'data.{name}'"
-                        multipart_data.append(
-                            FormField(name=name, file=file_payload_to_json(payload))
-                        )
-                    elif isinstance(value, str):
-                        multipart_data.append(FormField(name=name, value=value))
+                    multipart_data.append(
+                        await _form_data_field_to_form_field(name, value)
+                    )
         if (
             post_data_buffer is None
             and json_data is None
@@ -497,9 +514,8 @@ async def _form_data_field_to_form_field(name: str, value: Any) -> FormField:
         )
     if is_file_payload(value):
         payload = cast(FilePayload, value)
-        assert isinstance(
-            payload["buffer"], bytes
-        ), f"Unexpected buffer type of form field {name!r}"
+        if not isinstance(payload["buffer"], bytes):
+            raise Error(f"Unexpected buffer type of form field {name!r}")
         return FormField(name=name, file=file_payload_to_json(payload))
     if isinstance(value, (str, int, float, bool)):
         return FormField(name=name, value=str(value))
@@ -620,7 +636,7 @@ def is_json_content_type(headers: network.HeadersArray = None) -> bool:
     if not headers:
         return False
     for header in headers:
-        if header["name"] == "Content-Type":
+        if header["name"].lower() == "content-type":
             return header["value"].startswith("application/json")
     return False
 
@@ -629,7 +645,12 @@ def is_json_parsable(value: Any) -> bool:
     if not isinstance(value, str):
         return False
     try:
-        json.loads(value)
+        # NaN and Infinity are not valid JSON, unlike what json.loads() accepts by default.
+        json.loads(value, parse_constant=_reject_json_constant)
         return True
-    except json.JSONDecodeError:
+    except ValueError:
         return False
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"{value} is not valid JSON")

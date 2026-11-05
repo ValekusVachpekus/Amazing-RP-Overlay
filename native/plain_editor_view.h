@@ -69,7 +69,7 @@ struct EditorView {
     }
     bool Draw(bool interactive, bool readonly, float* scroll = nullptr) {
         const auto before=model.revision;
-        ImGui::BeginChild("plain-editor", ImVec2(0,0), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("plain-editor", ImVec2(0,0));
         if (restoreScroll >= 0) { ImGui::SetScrollY(restoreScroll); restoreScroll=-1; }
         const float line=ImGui::GetTextLineHeightWithSpacing(), margin=6;
         Layout(std::max(20.f,ImGui::GetWindowWidth()-ImGui::GetStyle().ScrollbarSize-2*margin-2*ImGui::GetStyle().WindowPadding.x));

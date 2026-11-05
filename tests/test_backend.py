@@ -176,6 +176,25 @@ class ServiceTest(unittest.TestCase):
         self.backend.close()
         self.temporary.cleanup()
 
+    def test_shutdown_cancels_jobs_and_rejects_new_writes(self):
+        entered = threading.Event()
+        def action(cancel, progress):
+            entered.set()
+            self.assertTrue(cancel.wait(5))
+            return "cancelled safely"
+        ident = self.backend.job("test", action)["job_id"]
+        self.assertTrue(entered.wait(5))
+        health = self.backend.dispatch("health", {})
+        self.assertTrue(health["shutdown"])
+        self.assertFalse(health["stopping"])
+        self.assertTrue(self.backend.dispatch("shutdown", {})["stopping"])
+        self.assertTrue(self.backend.dispatch("health", {})["stopping"])
+        with self.assertRaisesRegex(ValueError, "останавливается"):
+            self.backend.dispatch("notes_create", {"path": "should-not-exist.txt"})
+        self.backend.close()
+        self.assertEqual(self.backend.jobs[ident]["state"], "done")
+        self.assertFalse((self.root / "Notes/should-not-exist.txt").exists())
+
     def test_cancellation_and_previous_document(self):
         self.backend.store.publish(document())
         def cancellable(cancel, progress):

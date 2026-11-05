@@ -1,0 +1,2 @@
+#pragma once
+#define AMAZING_HELPER_VERSION "@HELPER_VERSION@"

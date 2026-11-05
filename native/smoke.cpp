@@ -4,6 +4,7 @@
 #include <fstream>
 #include <vector>
 #include <cmath>
+#include <cstdio>
 
 void Capture(IDirect3DDevice9* device, const wchar_t* suffix=L"") {
     wchar_t path[32768]{};
@@ -39,7 +40,16 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
+#ifdef AMAZING_HOST_DEP_OFF
+    DWORD depFlags = 0;
+    BOOL permanent = FALSE;
+    if (!GetProcessDEPPolicy(GetCurrentProcess(), &depFlags, &permanent) || (depFlags & PROCESS_DEP_ENABLE)) {
+        // Do not silently claim DEP-off coverage on a machine forcing DEP on.
+        return 22;
+    }
+#endif
     const bool selfTest = command && wcsstr(command, L"--self-test");
+    const auto designOption=command?wcsstr(command,L"--design="):nullptr;
     WNDCLASSW klass{}; klass.lpfnWndProc = WindowProc; klass.hInstance = instance; klass.lpszClassName = L"OverlaySmoke";
     RegisterClassW(&klass);
     HWND window = CreateWindowW(klass.lpszClassName, L"Amazing DLL test host — Ctrl+L, Alt+F", WS_OVERLAPPEDWINDOW,
@@ -48,7 +58,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     if (!d3d) return 1;
     D3DPRESENT_PARAMETERS parameters{}; parameters.Windowed = TRUE; parameters.SwapEffect = D3DSWAPEFFECT_DISCARD; parameters.hDeviceWindow = window;
     IDirect3DDevice9* device = nullptr;
-    if (FAILED(d3d->CreateDevice(0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, &device))) return 2;
+    const auto created=d3d->CreateDevice(0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, &device);
+    if (FAILED(created)) {std::fprintf(stderr,"D3D9 test host cannot create a device (HRESULT 0x%08lX).\n",static_cast<unsigned long>(created));return 2;}
+    const bool manualHost = command && wcsstr(command, L"--manual-map-host");
+    if (manualHost) {
+        ShowWindow(window, SW_HIDE);
+        MSG message{};
+        ULONGLONG started = GetTickCount64();
+        while (GetTickCount64() - started < 90000 && message.message != WM_QUIT) {
+            if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+            device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(15,23,42), 1, 0);
+            if (SUCCEEDED(device->BeginScene())) device->EndScene();
+            device->Present(nullptr, nullptr, nullptr, nullptr);
+            Sleep(10);
+        }
+        device->Release(); d3d->Release(); return 0;
+    }
     HMODULE library = LoadLibraryW(L"AmazingLawClient.dll");
     if (!library) return 3;
     using Probe = unsigned(__cdecl*)();
@@ -64,6 +89,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     auto selectTab=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayTabForTest"));
     auto activeTab=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayActiveTabForTest"));
     auto noteFont=reinterpret_cast<NoteFont>(GetProcAddress(library,"AmazingOverlayNoteFontForTest"));
+    auto design=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayDesignForTest"));
+    auto layout=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayLayoutForTest"));
+    auto uiState=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayUiForTest"));
+    auto chatAction=reinterpret_cast<SelectTab>(GetProcAddress(library,"AmazingOverlayChatForTest"));
+    auto chatState=reinterpret_cast<Probe>(GetProcAddress(library,"AmazingOverlayChatStateForTest"));
+    bool previewedDesign=false;
     unsigned tabFrames=0;
     bool previewedNotebook=false;
     bool previewedSettings = false;
@@ -82,6 +113,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         device->Present(nullptr, nullptr, nullptr, nullptr);
         if (selfTest) {
             if (probe() & 1u) show();
+            if(wcsstr(command,L"--chat-test") && probe()==3u){
+                if(!chatAction || !chatState)return 26;
+                if(frames==90)chatAction(1);
+                if(frames==150 && (chatState()&0x7ffffu)!=(2u|(1u<<17)|(1u<<18)))return 27;
+                if(frames==152)chatAction(3);
+                if(frames==205 && (chatState()&0x3ffffu)!=(1u<<17))return 28;
+                if(frames==207)chatAction(1);
+                if(frames==245 && (chatState()&0x7ffffu)!=(2u|(1u<<17)|(1u<<18)))return 29;
+            }
+            if(wcsstr(command,L"--chat-reload") && frames==245 && (!chatState || (chatState()&0x7ffffu)!=(2u|(1u<<17)|(1u<<18))))return 30;
+            if(designOption && !previewedDesign && probe()==3u && frames>80){
+                if(!design)return 17;
+                design(static_cast<unsigned>(_wtoi(designOption+9)));previewedDesign=true;
+            }
             if(probe()==3u && wcsstr(command,L"--tabs")){
                 if(!selectTab || !activeTab || !noteFont || !settingsPreview)return 9;
                 ++tabFrames;
@@ -113,6 +158,24 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
                 previewedSettings = true;
             }
             if (++frames >= 250 && probe() == 3u) {
+                if(designOption){
+                    const auto scenario=static_cast<unsigned>(_wtoi(designOption+9));
+                    if(!previewedDesign || !layout)return 18;
+                    if(scenario==4 && (layout()&31u)!=17u)return 19;
+                    if(scenario>=5 && scenario<=7 && (layout()&15u)!=2u)return 20;
+                    if(scenario==6 && (layout()>>8)!=2u)return 21;
+                    if(scenario==7 && (layout()>>8)!=1u)return 22;
+                    if(!uiState || !(uiState()&(1u<<24)))return 23;
+                    const auto expectedRows=wcsstr(command,L"--expect-law-rows=");
+                    if(expectedRows && (scenario==0 || scenario==13)){
+                        const auto ui=uiState();
+                        // The fixture pins the selected document. It must occur
+                        // once, regardless of any other imported documents.
+                        const auto expected=scenario==13?1u:static_cast<unsigned>(_wtoi(expectedRows+18));
+                        if((ui&255u)!=expected || ((ui>>8)&255u)!=1u)return 24;
+                        if(((ui>>16)&3u)!=(scenario==13?2u:1u))return 25;
+                    }
+                }
                 if (!visibility) return 6;
                 for (int cycle = 0; cycle < 100; ++cycle) {
                     // Loss/restoration of focus must never turn Hidden into View.

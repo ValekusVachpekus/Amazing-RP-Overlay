@@ -1,5 +1,6 @@
 #include "rpc.h"
 #include "text_search.h"
+#include "desktop_ui.h"
 #include <imgui.h>
 #include <algorithm>
 #include <functional>
@@ -10,6 +11,8 @@
 
 namespace {
 DocumentSearch* currentSearch = nullptr;
+DocumentJump* currentJump=nullptr;
+bool jumpPost=false;
 std::unordered_map<std::string, std::vector<std::pair<size_t, size_t>>> matchCache;
 const std::vector<std::pair<size_t, size_t>>& CachedMatches(const std::string& text) {
     const auto found = matchCache.find(text);
@@ -25,11 +28,17 @@ float RichText(const std::string& text, ImVec2 origin, float width, ImU32 color)
     if (currentSearch) currentSearch->cursor += static_cast<int>(matches.size());
     auto* font = ImGui::GetFont();
     auto* draw = ImGui::GetWindowDrawList();
-    const float size = ImGui::GetFontSize(), height = ImGui::GetTextLineHeight() + 3;
+    const float size = ImGui::GetFontSize(), height = ImGui::GetTextLineHeight() + ui::Px(5);
     const char* begin = text.c_str();
     const char* end = begin + text.size();
     const char* line = begin;
     float y = origin.y;
+    size_t jumpAt=std::string::npos;
+    if(currentJump && currentJump->pending && jumpPost){
+        const auto targets=reader_search::Matches(text,currentJump->text);
+        if(currentJump->occurrence>=static_cast<int>(targets.size()))currentJump->occurrence-=static_cast<int>(targets.size());
+        else if(currentJump->occurrence>=0)jumpAt=targets[currentJump->occurrence].first;
+    }
     while (line < end) {
         const char* newline = std::find(line, end, '\n');
         const char* stop = font->CalcWordWrapPositionA(size / font->FontSize, line, newline, std::max(20.0f, width));
@@ -46,6 +55,9 @@ float RichText(const std::string& text, ImVec2 origin, float width, ImU32 color)
             if (active && currentSearch->jump && from == matches[i].first) ImGui::SetScrollFromPosY(y - ImGui::GetWindowPos().y, .35f);
         }
         draw->AddText(ImVec2(origin.x, y), color, line, stop);
+        if(jumpAt!=std::string::npos && jumpAt>=static_cast<size_t>(line-begin) && jumpAt<static_cast<size_t>(stop-begin)){
+            ImGui::SetScrollFromPosY(y-ImGui::GetWindowPos().y,.2f);currentJump->pending=false;currentJump->found=true;
+        }
         y += height;
         line = stop;
         if (line == newline && line < end) ++line;
@@ -178,17 +190,27 @@ void Node(const Json& node) {
     auto text = CompactDisplayText(Text(node));
     if (text.find_first_not_of(" \r\n\t") == std::string::npos) return;
     bool heading = tag.size() == 2 && tag[0] == 'h';
-    if (heading) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
+    const bool chapter=heading && (text.rfind("ГЛАВА",0)==0 || text.rfind("Глава",0)==0 || text.rfind("РАЗДЕЛ",0)==0);
+    const bool boldFont=heading && ui::Bold();
+    if(boldFont)ImGui::PushFont(ui::Bold());
+    if(heading)ImGui::Dummy(ImVec2(0,ui::Px(chapter?12:8)));
     if (tag == "li") ImGui::Bullet();
     const auto origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    float height = RichText(text, origin, width, ImGui::GetColorU32(ImGuiCol_Text));
-    ImGui::Dummy(ImVec2(width, height));
-    if (heading) { ImGui::PopStyleColor(); ImGui::Spacing(); }
+    const float padding=heading?ui::Px(12):0;
+    if(heading){
+        const float height=ImGui::CalcTextSize(text.c_str(),nullptr,false,std::max(20.f,width-padding*2)).y*1.4f+padding*2;
+        auto* draw=ImGui::GetWindowDrawList();
+        if(chapter)draw->AddRectFilled(origin,ImVec2(origin.x+ui::Px(4),origin.y+height),ui::Color(ImGuiCol_CheckMark));
+        else draw->AddRectFilled(origin,ImVec2(origin.x+width,origin.y+height),ui::Color(ImGuiCol_FrameBg),ui::Px(8));
+    }
+    float height = RichText(text, ImVec2(origin.x+padding,origin.y+padding), std::max(20.f,width-padding*2), ImGui::GetColorU32(chapter?ImGuiCol_CheckMark:ImGuiCol_Text));
+    ImGui::Dummy(ImVec2(width, height+padding*2));
+    if(boldFont)ImGui::PopFont();
 }
 }
 
-void DrawDocument(const Json& document, DocumentSearch* search) {
+void DrawDocument(const Json& document, DocumentSearch* search,DocumentJump* target) {
     static const Json* previousDocument = nullptr;
     static std::string previousQuery;
     const std::string query = search ? search->query : "";
@@ -196,13 +218,17 @@ void DrawDocument(const Json& document, DocumentSearch* search) {
         matchCache.clear(); previousDocument = &document; previousQuery = query;
     }
     currentSearch = search;
+    currentJump=target;
     if (search) search->cursor = 0;
     if (!document.contains("posts")) return;
     for (const auto& post : document.at("posts")) {
+        jumpPost=target && post.value("post_id","")==target->post_id;
         ImGui::PushID(post.value("post_id", "").c_str());
         for (const auto& node : post.at("blocks")) Node(node);
         ImGui::PopID();
     }
     if (search) { search->total = search->cursor; search->jump = false; }
     currentSearch = nullptr;
+    if(target)target->pending=false;
+    currentJump=nullptr;jumpPost=false;
 }

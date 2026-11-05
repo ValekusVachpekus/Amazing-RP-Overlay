@@ -32,12 +32,9 @@ from typing import (
 )
 
 from playwright._impl._api_structures import (
-    AriaRole,
     DropPayload,
     FilePayload,
     FloatRect,
-    FrameExpectOptions,
-    FrameExpectResult,
     Position,
 )
 from playwright._impl._element_handle import ElementHandle
@@ -48,6 +45,11 @@ from playwright._impl._helper import (
     locals_to_params,
     monotonic_time,
     to_impl,
+)
+from playwright._impl._internal_structures import (
+    AriaRole,
+    FrameExpectOptions,
+    FrameExpectResult,
 )
 from playwright._impl._js_handle import Serializable, serialize_argument
 from playwright._impl._str_utils import (
@@ -78,6 +80,8 @@ class Locator:
         self._selector = selector
         self._loop = frame._loop
         self._dispatcher_fiber = frame._connection._dispatcher_fiber
+        # Python code for this locator, known only for normalized locators.
+        self._locator_code: Optional[str] = None
 
         if has_text:
             self._selector += f" >> internal:has-text={escape_for_text_selector(has_text, exact=False)}"
@@ -103,6 +107,11 @@ class Locator:
 
     def __repr__(self) -> str:
         return f"<Locator frame={self._frame!r} selector={self._selector!r}>"
+
+    def __str__(self) -> str:
+        if self._locator_code is not None:
+            return self._locator_code
+        return self.__repr__()
 
     async def _with_element(
         self,
@@ -404,6 +413,9 @@ class Locator:
             self._selector + " >> internal:and=" + json.dumps(locator._selector),
         )
 
+    def within(self, locator: "Locator") -> "Locator":
+        return locator.locator(self)
+
     async def focus(self, timeout: float = None) -> None:
         params = locals_to_params(locals())
         return await self._frame.focus(self._selector, strict=True, **params)
@@ -588,6 +600,7 @@ class Locator:
             lambda h, timeout: h.screenshot(
                 **{**params, "timeout": timeout},
             ),
+            timeout,
         )
 
     async def aria_snapshot(
@@ -607,12 +620,14 @@ class Locator:
         )
 
     async def normalize(self) -> "Locator":
-        result = await self._frame._channel.send(
+        result = await self._frame._channel.send_return_as_dict(
             "resolveSelector",
             None,
-            {"selector": self._selector},
+            {"selector": self._selector, "sdkLanguage": "python"},
         )
-        return Locator(self._frame, result)
+        locator = Locator(self._frame, result["resolvedSelector"])
+        locator._locator_code = result.get("locatorCode")
+        return locator
 
     async def scroll_into_view_if_needed(
         self,

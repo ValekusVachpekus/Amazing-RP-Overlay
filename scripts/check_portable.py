@@ -16,11 +16,11 @@ from amazing_overlay.transport import rpc
 def main():
     app = QCoreApplication([])
     paths = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
-    executable = Path(paths[0]).resolve() if paths else ROOT / ".cache/dist" / "AmazingLawOverlay" / "AmazingLawOverlay.exe"
+    executable = Path(paths[0]).resolve() if paths else ROOT / ".cache/dist" / "AmazingHelper" / "AmazingHelper.exe"
     with tempfile.TemporaryDirectory() as directory:
         env = {key: value for key, value in os.environ.items() if not key.startswith("AI_")}
         env.update(AMAZING_OVERLAY_DATA=directory, QT_QPA_PLATFORM="offscreen")
-        process = subprocess.Popen([str(executable), "backend"], cwd=executable.parent, env=env)
+        process = subprocess.Popen([str(executable), "backend", "--no-legacy-import"], cwd=executable.parent, env=env)
         try:
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -34,12 +34,38 @@ def main():
             else:
                 raise AssertionError("Frozen backend did not start")
             assert health["version"] == 1
+            assert health.get("shutdown"), "Update the backend for launcher stop support"
+            for asset in ("check.svg", "up.svg", "down.svg"):
+                assert (executable.parent / '_internal/amazing_overlay/assets' / asset).is_file(), f"Missing desktop asset: {asset}"
             assert health["documents"] == 0, "Release must not contain local laws"
             assert not rpc("settings")["has_api_key"], "Release must not contain a local credential"
+            rpc("settings_save", {"notes_dir": str(Path(directory) / "Notes")})
             assert "ai_api_key" not in rpc("settings")
             rpc("state_set", {"key": "portable-test", "value": "работает"})
             assert rpc("state_get", {"key": "portable-test"}) == "работает"
             print("PORTABLE BACKEND: PASS; no local laws or credentials bundled")
+            assert health.get("chat_history") and health.get("citations"), "Update backend for native chat support"
+            chat = rpc("chat_get")
+            assert not chat["messages"], "Release must not contain a personal chat history"
+            saved_chat = rpc("chat_save", {"revision": chat["revision"], "messages": [{"id": "portable", "role": "user", "content": "Проверка чата"}]})
+            assert rpc("chat_get")["messages"][0]["content"] == "Проверка чата"
+            rpc("chat_clear", {"revision": saved_chat["revision"]})
+            try:
+                rpc("chat_save", {"revision": saved_chat["revision"], "messages": chat["messages"]})
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("A late chat write restored cleared history")
+            print("PORTABLE CHAT: PASS; private history, atomic clear and stale-write protection")
+            assert health.get("full_ai_context"), "Update backend for full-document source selection"
+            assert rpc("ai_context", {"context_mode": "none"}) == {"documents": 0, "context_chars": 0}
+            try:
+                rpc("ai_context", {"context_mode": "selected", "doc_ids": []})
+            except RuntimeError as error:
+                assert "Выберите" in str(error)
+            else:
+                raise AssertionError("An empty selection must not silently select all laws")
+            print("PORTABLE AI CONTEXT: PASS; plain chat and explicit selection, no paid API calls")
             assert health.get("notes"), "Update the backend for notebook support"
             notes_root = Path(directory) / "Личные заметки"
             rpc("settings_save", {"notes_dir": str(notes_root)})
@@ -80,10 +106,27 @@ def main():
                     time.sleep(3)
                     assert client.poll() is None, f"Frozen {mode} failed to start: {client.returncode}"
                     print(f"PORTABLE {mode.upper()}: PASS")
+                    if mode == "manager":
+                        forwarded = subprocess.run([str(executable), "manager", "--page", "appearance"],
+                                                   cwd=executable.parent, env=env, timeout=15)
+                        assert forwarded.returncode == 0, "Settings navigation must reuse the running manager"
+                        assert client.poll() is None, "The original manager must remain open"
+                        print("PORTABLE MANAGER NAVIGATION: PASS")
+                    if mode == "overlay":
+                        from amazing_overlay.client_control import request_close
+                        request_close("overlay")
+                        client.wait(timeout=15)
+                        assert client.returncode == 0, "Overlay must close cooperatively before an update"
+                        print("PORTABLE CLIENT UPDATE HANDSHAKE: PASS")
                 finally:
                     if client.poll() is None:
                         client.terminate()
                     client.wait(timeout=10)
+            from amazing_overlay.transport import stop_backend
+            stop_backend(timeout=15)
+            process.wait(timeout=10)
+            assert process.returncode == 0, "Backend must exit cleanly after launcher shutdown"
+            print("PORTABLE GRACEFUL STOP: PASS")
         finally:
             process.terminate()
             process.wait(timeout=10)

@@ -30,14 +30,7 @@ from typing import (
 
 from pyee import EventEmitter
 
-from playwright._impl._api_structures import (
-    AriaRole,
-    DropPayload,
-    FilePayload,
-    FrameExpectOptions,
-    FrameExpectResult,
-    Position,
-)
+from playwright._impl._api_structures import DropPayload, FilePayload, Position
 from playwright._impl._connection import (
     ChannelOwner,
     from_channel,
@@ -57,6 +50,11 @@ from playwright._impl._helper import (
     locals_to_params,
     monotonic_time,
     url_matches,
+)
+from playwright._impl._internal_structures import (
+    AriaRole,
+    FrameExpectOptions,
+    FrameExpectResult,
 )
 from playwright._impl._js_handle import (
     JSHandle,
@@ -82,6 +80,7 @@ from playwright._impl._locator import (
 from playwright._impl._network import Response
 from playwright._impl._set_input_files_helpers import convert_input_files
 from playwright._impl._waiter import Waiter
+from playwright._impl._webmcp import WebMCP
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright._impl._page import Page
@@ -102,6 +101,7 @@ class Frame(ChannelOwner):
         self._page: Optional[Page] = None
         self._load_states: Set[str] = set(initializer["loadStates"])
         self._event_emitter = EventEmitter()
+        self._webmcp = WebMCP(self)
         self._channel.on(
             "loadstate",
             lambda params: self._on_load_state(params.get("add"), params.get("remove")),
@@ -497,8 +497,8 @@ class Frame(ChannelOwner):
             )
         )
 
-    async def content(self) -> str:
-        return await self._channel.send("content", None)
+    async def content(self, includeShadow: bool = None) -> str:
+        return await self._channel.send("content", None, locals_to_params(locals()))
 
     async def set_content(
         self,
@@ -517,6 +517,10 @@ class Frame(ChannelOwner):
     @property
     def url(self) -> str:
         return self._url or ""
+
+    @property
+    def webmcp(self) -> WebMCP:
+        return self._webmcp
 
     @property
     def parent_frame(self) -> Optional["Frame"]:

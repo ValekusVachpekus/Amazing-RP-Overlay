@@ -6,8 +6,9 @@ import sys
 import time
 import uuid
 
-from PySide6.QtCore import QObject, QProcess, QRunnable, QThreadPool, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QProcess, QRunnable, QThreadPool, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from shiboken6 import isValid
 
 from .settings import PIPE_NAME, ROOT
 
@@ -47,7 +48,10 @@ def rpc(method, params=None, timeout=15000):
 
 def ensure_backend():
     try:
-        return rpc("health")
+        value = rpc("health")
+        if value.get("stopping"):
+            raise RuntimeError("Бэкенд ещё останавливается. Дождитесь завершения.")
+        return value
     except ConnectionError:
         if getattr(sys, "frozen", False):
             command = ["backend"]
@@ -61,6 +65,26 @@ def ensure_backend():
             except ConnectionError:
                 continue
         raise ConnectionError("Не удалось запустить бэкенд; проверьте зависимости и diagnostics.log")
+
+
+def stop_backend(timeout=45):
+    """Graceful, same-user RPC stop. Never terminate arbitrary Python processes."""
+    health = rpc("health", timeout=2500)
+    if not health.get("shutdown"):
+        raise RuntimeError("Обновите бэкенд: эта версия не поддерживает остановку из лаунчера.")
+    rpc("shutdown")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            rpc("health", timeout=2500)
+        except ConnectionError:
+            return False
+        except TimeoutError:
+            # A health socket may be accepted just as Qt exits. Confirm that the
+            # next connection is gone instead of treating that race as a failure.
+            pass
+        time.sleep(.15)
+    raise TimeoutError("Бэкенд ещё завершает задачи. Он будет остановлен после их завершения; принудительное закрытие не выполнялось.")
 
 
 class WorkSignals(QObject):
@@ -101,7 +125,8 @@ def background(function, done, failed):
 
 
 class RpcServer(QObject):
-    completed = Signal(object, bytes)
+    completed = Signal(object, bytes, bool)
+    stopped = Signal()
 
     def __init__(self, backend):
         super().__init__()
@@ -113,6 +138,8 @@ class RpcServer(QObject):
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(8)
         self.buffers = {}
+        self.stopping = False
+        self.stopped.connect(QCoreApplication.instance().quit)
 
     def listen(self):
         return self.server.listen(PIPE_NAME)
@@ -125,8 +152,10 @@ class RpcServer(QObject):
             socket.disconnected.connect(lambda s=socket: self.drop(s))
 
     def drop(self, socket):
-        self.buffers.pop(socket, None)
-        socket.deleteLater()
+        if socket in self.buffers:
+            self.buffers.pop(socket, None)
+            if isValid(socket):
+                socket.deleteLater()
 
     def read(self, socket):
         data = self.buffers.get(socket)
@@ -144,22 +173,33 @@ class RpcServer(QObject):
 
         def execute():
             ident = None
+            stop = False
             try:
                 request = json.loads(raw)
                 ident = request.get("id")
                 if request.get("v") != 1 or not isinstance(ident, str) or not isinstance(request.get("params", {}), dict):
                     raise ValueError("Неверная версия или формат протокола")
                 result = self.backend.dispatch(request["method"], request.get("params", {}))
+                stop = request["method"] == "shutdown"
                 response = {"v": 1, "id": ident, "result": result}
             except Exception as exc:
                 response = {"v": 1, "id": ident, "error": {"code": "request_failed", "message": str(exc)[:1000]}}
             encoded = json.dumps(response, ensure_ascii=False).encode() + b"\n"
             if len(encoded) > MAX_FRAME:
                 encoded = json.dumps({"v": 1, "id": ident, "error": {"code": "too_large", "message": "Ответ превышает 16 МБ"}}).encode() + b"\n"
-            self.completed.emit(socket, encoded)
+            self.completed.emit(socket, encoded, stop)
         self.pool.start(Work(execute))
 
-    def respond(self, socket, data):
+    def respond(self, socket, data, stop=False):
         if socket in self.buffers:
             socket.write(data)
             socket.disconnectFromServer()
+        if stop and not self.stopping:
+            self.stopping = True
+            # Wait for already accepted requests and cancelled parser/API jobs away
+            # from Qt's event loop; keep health reachable until shutdown completes.
+            def finish():
+                self.pool.waitForDone()
+                self.backend.close()
+                self.stopped.emit()
+            QThreadPool.globalInstance().start(Work(finish))

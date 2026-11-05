@@ -18,18 +18,21 @@ from .notes import Notes
 
 
 class Backend:
-    def __init__(self, data=DATA, root=ROOT):
+    def __init__(self, data=DATA, root=ROOT, import_legacy=True):
         configure_browser_environment()
         self.store = Store(data / "laws.db")
         self.lock = threading.RLock()
         self.browser_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="backend-job")
         self.jobs = {}
+        from .native_session import NativeRegistry
+        self.native = NativeRegistry()
+        self.stopping = threading.Event()
         self.notes = Notes(root, data, load_settings)
-        self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws")
+        self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws") if import_legacy else []
         urls = root / "local" / "urls.txt" if (root / "local" / "urls.txt").exists() else root / "urls.txt"
         if not self.store.get_preference("sources_initialized", False):
-            if urls.exists():
+            if import_legacy and urls.exists():
                 for line in urls.read_text(encoding="utf-8-sig").splitlines():
                     try:
                         self.store.add_source(line)
@@ -69,8 +72,23 @@ class Backend:
 
     def dispatch(self, method, params):
         if method == "health":
-            return {"version": 1, "app_version": __version__, "native_settings": True, "notes": True, "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
+            return {"version": 1, "app_version": __version__, "native_settings": True, "notes": True,
+                    "shutdown": True, "stopping": self.stopping.is_set(), "chat_history": True, "citations": True,
+                    "full_ai_context": True, "native_sessions": True,
+                    "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
                     "browsers_dir": configure_browser_environment(), "import_warnings": self.import_warnings}
+        if method == "shutdown":
+            self.stopping.set()
+            with self.lock:
+                for job in self.jobs.values():
+                    job["cancel"].set()
+            return {"stopping": True}
+        if self.stopping.is_set():
+            raise ValueError("Бэкенд останавливается. Дождитесь завершения и запустите его снова.")
+        if method == "native_register":
+            return self.native.register(params)
+        if method == "native_status":
+            return self.native.status(params["pid"], params["created"])
         if method.startswith("notes_"):
             return self.notes.dispatch(method, params)
         if method == "documents":
@@ -78,6 +96,15 @@ class Backend:
         if method == "document":
             doc = self.store.document(params["id"])
             return {"document": doc, "html": document_html(doc)}
+        if method == "citation":
+            return self.store.citation(params)
+        if method == "ai_context":
+            plan = ai.context_plan(self.store, load_settings(), params)
+            return {key: plan[key] for key in ("documents", "context_chars")}
+        if method == "chat_get":
+            return self.store.chat()
+        if method in {"chat_save", "chat_clear"}:
+            return self.store.save_chat(params["revision"], [] if method == "chat_clear" else params["messages"])
         if method == "search":
             return self.store.search(params.get("query", ""), params.get("doc_ids"), params.get("limit", 40))
         if method == "versions":
@@ -159,6 +186,7 @@ class Backend:
         raise ValueError("Неизвестный метод API")
 
     def close(self):
+        self.stopping.set()
         with self.lock:
             for job in self.jobs.values():
                 job["cancel"].set()
