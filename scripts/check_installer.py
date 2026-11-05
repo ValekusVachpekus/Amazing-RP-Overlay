@@ -53,8 +53,6 @@ def main():
         assert all(p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() == digest for p, digest in snapshots.items()), "Personal fixtures changed"
         with sqlite3.connect(data / "laws.db") as db:
             assert db.execute("SELECT value FROM installer_fixture").fetchall() == [("preserved",)]
-        if unmanaged.parent.exists():
-            assert unmanaged.read_bytes() == b"unmanaged runtime-adjacent note"
     def uninstall():
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
             command = winreg.QueryValueEx(key, "UninstallString")[0]
@@ -71,6 +69,7 @@ def main():
     preserved()
     unmanaged.parent.mkdir(parents=True, exist_ok=True)
     unmanaged.write_bytes(b"unmanaged runtime-adjacent note")
+    snapshots[unmanaged] = hashlib.sha256(unmanaged.read_bytes()).hexdigest()
     # Keep only our own synthetic backend alive; Setup must decline replacement.
     env = dict(os.environ, AMAZING_OVERLAY_DATA=str(data), AMAZING_OVERLAY_PIPE="amazing-helper-installer-" + str(os.getpid()), QT_QPA_PLATFORM="offscreen")
     backend = subprocess.Popen([str(app / "AmazingHelper.exe"), "backend"], env=env, cwd=app)
