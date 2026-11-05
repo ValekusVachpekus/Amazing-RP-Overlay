@@ -290,8 +290,8 @@ class IntegrationTest(unittest.TestCase):
             try:
                 self.assertNotIn('development', portable.nav_buttons)
                 self.assertIsNone(portable.developer_card)
-                self.assertEqual(len(portable.secondary_grid.cards), 1)
-                self.assertEqual(portable.secondary_grid.columns, 1)
+                self.assertEqual(len(portable.secondary_grid.cards), 2)
+                self.assertEqual(portable.secondary_grid.columns, 2)
             finally:
                 portable.close()
 

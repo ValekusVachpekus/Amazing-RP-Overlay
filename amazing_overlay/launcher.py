@@ -1,9 +1,12 @@
 ﻿"""Source/frozen native Qt launcher. Backend and client actions stay asynchronous."""
 import sys
+import threading
+import time
 from datetime import datetime
 from PySide6.QtCore import QProcess, QTimer, Qt, QSize
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QMainWindow, QWidget, QVBoxLayout,
-                               QHBoxLayout, QFileDialog, QScrollArea, QSizePolicy, QStackedWidget)
+                               QHBoxLayout, QFileDialog, QScrollArea, QSizePolicy, QStackedWidget,
+                               QApplication, QInputDialog, QMessageBox, QProgressDialog)
 from . import __version__
 from .desktop import AUTHOR, action, label, open_folder
 from .launcher_presentation import CardGrid, PathLabel, icon, separator, setup, state
@@ -26,6 +29,8 @@ class LauncherWindow(QMainWindow):
         self.poll_revision = 0
         self.notes_root = None
         self.manager = None
+        self.native_busy = self.update_busy = False
+        self.available_update = None
         self.group_pages = {"manager": "sources", "settings": "appearance"}
         self.laws_root = str(DATA)
         self.build = ROOT / "scripts/build"
@@ -79,8 +84,11 @@ class LauncherWindow(QMainWindow):
         self.manager_button = action("Открыть управление  →", lambda: self.launch("manager"), manager, "primary")
         self.overlay_card, overlay = self.make_card("Обычный оверлей", "overlay", "Быстрый поиск и чтение поверх игры. Режим оконного наложения.")
         self.overlay_button = action("Открыть оверлей  →", lambda: self.launch("overlay"), overlay)
-        self.native_card, native = self.make_card("Внутриигровой ASI / DLL", "plugin", "Папка плагина и файлы для ручной установки в игру.")
-        self.native_button = action("Открыть папку ASI/DLL", self.open_native, native)
+        self.native_card, native = self.make_card("Внутриигровой ASI / DLL", "plugin", "Запустите игру, затем нажмите кнопку. Совместимость с защитой игры пока не подтверждена.")
+        self.native_status = label("Ctrl+L — открыть загруженный оверлей", "small")
+        native.addWidget(self.native_status)
+        self.native_button = action("Запустить", self.start_native, native, "primary")
+        action("Папка ASI/DLL", self.open_native, native, "quiet")
         self.apps_grid = CardGrid([self.manager_card, self.overlay_card, self.native_card], parent=self.overview)
         self.content.addWidget(self.apps_grid)
         self.notes_card, notes = self.make_card("Заметки", "note", "Управление TXT-файлами, выбор рабочей папки и автосохранение.")
@@ -92,6 +100,13 @@ class LauncherWindow(QMainWindow):
         self.choose_button = action("Выбрать папку", self.choose_notes, note_actions, "quiet")
         notes.addLayout(note_actions)
         secondary = [self.notes_card]
+        self.update_card, updates = self.make_card("Обновления AmazingHelper", "up", "Новые версии из GitHub Releases. Данные сохраняются отдельно от программы.")
+        self.update_status = label("Версия " + __version__, "small")
+        updates.addWidget(self.update_status)
+        self.check_update_button = action("Проверить обновления", self.check_updates, updates)
+        self.install_update_button = action("Скачать и установить", self.install_update, updates, "primary")
+        self.install_update_button.hide()
+        secondary.append(self.update_card)
         self.developer_card = None
         if self.developer_mode:
             self.developer_card, development = self.make_card("Разработка", "code", "Сборка ASI/DLL и переносимого Release-пакета.")
@@ -113,6 +128,11 @@ class LauncherWindow(QMainWindow):
         self.timer.timeout.connect(self.check)
         self.timer.start()
         self.check()
+        from .product import installed
+        if installed(ROOT):
+            QTimer.singleShot(500, self.setup_installed_notes)
+        if getattr(sys, "frozen", False):
+            QTimer.singleShot(1500, self.check_updates)
 
     def make_brand(self, outer):
         bar = QFrame()
@@ -298,6 +318,184 @@ class LauncherWindow(QMainWindow):
         state(self.status, appearance)
         self.notes_button.setEnabled(not self.notes_pending)
         self.choose_button.setEnabled(not self.notes_pending)
+        self.native_button.setEnabled(not (self.native_busy or self.update_busy or self.operation))
+        self.check_update_button.setEnabled(not self.update_busy)
+        self.install_update_button.setEnabled(not (self.update_busy or self.native_busy or self.operation or self.notes_pending))
+
+    def start_native(self):
+        if self.native_busy or self.update_busy or self.operation:
+            return
+        from .game_process import find_games
+        self.native_busy = True
+        self.native_status.setText("Ищем запущенную игру…")
+        self.update_buttons()
+        def failed(error):
+            self.native_busy = False
+            if not self.closed:
+                self.native_status.setText(str(error))
+                self.update_buttons()
+        def selected(games):
+            if self.closed:
+                return
+            if not games:
+                failed("Запустите Amazing или GTA SA и нажмите «Запустить» ещё раз.")
+                return
+            game = games[0]
+            if len(games) > 1:
+                choice, ok = QInputDialog.getItem(self, "Выберите игру", "Процесс для оверлея", [g.label for g in games], 0, False)
+                if not ok:
+                    failed("Запуск отменён.")
+                    return
+                game = next(g for g in games if g.label == choice)
+            self.native_status.setText("Запускаем бэкенд и внутриигровой оверлей…")
+            from .native_launch import launch_native
+            def done(message):
+                self.native_busy = False
+                if not self.closed:
+                    self.native_status.setText(message)
+                    self.update_buttons()
+                    self.check()
+            background(lambda: launch_native(game, ROOT, ensure_backend, rpc), done, failed)
+        background(find_games, selected, failed)
+
+    def setup_installed_notes(self):
+        from .settings import load_settings
+        def loaded(settings):
+            if self.closed or settings.get("notes_dir"):
+                return
+            box = QMessageBox(self)
+            box.setWindowTitle("Заметки AmazingHelper")
+            box.setText("Подключите прежнюю папку Notes или создайте новую в Документах. Файлы не перемещаются.")
+            old = box.addButton("Выбрать прежнюю папку", QMessageBox.ActionRole)
+            new = box.addButton("Создать в Документах", QMessageBox.AcceptRole)
+            box.addButton("Позже", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() == old:
+                self.choose_notes()
+            elif box.clickedButton() == new:
+                self.notes_pending = True
+                self.update_buttons()
+                def save():
+                    from .product import default_notes
+                    ensure_backend()
+                    return rpc("settings_save", {"notes_dir": str(default_notes(ROOT))})
+                def done(value):
+                    self.notes_pending = False
+                    if not self.closed:
+                        self.update_buttons()
+                        self.check()
+                def failed(error):
+                    done(None)
+                    self.show_error(error)
+                background(save, done, failed)
+        background(load_settings, loaded, self.show_error)
+
+    def check_updates(self):
+        if self.update_busy:
+            return
+        from .updates import check_update
+        self.update_busy = True
+        self.update_status.setText("Проверяем GitHub Releases…")
+        self.update_buttons()
+        def done(value):
+            self.update_busy = False
+            if self.closed:
+                return
+            self.available_update = value
+            self.update_status.setText("Доступна версия " + value["version"] if value else "Установлена актуальная версия " + __version__)
+            self.install_update_button.setVisible(bool(value))
+            from .product import installed
+            self.install_update_button.setText("Скачать и установить" if installed(ROOT) else "Открыть portable ZIP")
+            self.update_buttons()
+        def failed(error):
+            self.update_busy = False
+            if not self.closed:
+                self.update_status.setText("Проверка недоступна. " + str(error))
+                self.update_buttons()
+        background(check_update, done, failed)
+
+    def install_update(self):
+        if not self.available_update or self.update_busy or self.native_busy or self.operation or self.notes_pending:
+            return
+        from .product import installed
+        update = self.available_update
+        if not installed(ROOT):
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            package = next(p for p in update["packages"] if p["type"] == "portable")
+            QDesktopServices.openUrl(QUrl(package["url"]))
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("AmazingHelper " + update["version"])
+        box.setText("Скачать обновление? Перед установкой закройте игру. Клиенты и бэкенд завершатся штатно.")
+        box.setDetailedText(update["notes"])
+        box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        if box.exec() != QMessageBox.Ok:
+            return
+        from .game_process import find_games
+        from .updates import download_installer
+        self.update_busy = True
+        self.update_buttons()
+        cancel = threading.Event()
+        progress = QProgressDialog("Скачиваем и проверяем установщик…", "Отмена", 0, 0, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.canceled.connect(cancel.set)
+        progress.show()
+        self.download_progress = progress
+        def download():
+            if find_games():
+                raise RuntimeError("Закройте игру перед обновлением.")
+            return download_installer(update, DATA / "updates", cancel)
+        def failed(error):
+            progress.reset()
+            progress.hide()
+            self.update_busy = False
+            if not self.closed:
+                self.update_status.setText(str(error))
+                self.update_buttons()
+        def downloaded(path):
+            progress.reset()
+            progress.hide()
+            if cancel.is_set() or self.closed:
+                failed("Обновление отменено.")
+                return
+            if self.manager is not None:
+                if self.manager.header_timer.isActive():
+                    self.manager.header_timer.stop()
+                    self.manager.save_header()
+                self.manager.cancel_jobs()
+            started = time.monotonic()
+            def wait_manager():
+                if self.manager is not None and self.manager.work:
+                    if time.monotonic() - started > 45:
+                        failed("Дождитесь завершения операций управления базой.")
+                        return
+                    QTimer.singleShot(100, wait_manager)
+                    return
+                def prepare():
+                    from .client_control import request_close
+                    from .transport import stop_backend
+                    if find_games():
+                        raise RuntimeError("Закройте игру перед установкой.")
+                    for mode in ("overlay", "install-browser"):
+                        request_close(mode)
+                    try:
+                        rpc("health")
+                    except ConnectionError:
+                        return
+                    stop_backend()
+                def ready(_):
+                    try:
+                        from .updates import start_installer
+                        start_installer(path, ROOT)
+                    except Exception as error:
+                        failed(error)
+                        return
+                    self.close()
+                    QApplication.quit()
+                background(prepare, ready, failed)
+            wait_manager()
+        background(download, downloaded, failed)
 
     def launch(self, mode, page=None):
         if mode == "manager":

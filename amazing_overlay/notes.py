@@ -55,7 +55,8 @@ class Notes:
         if self._active_root is not None:
             return self._active_root
         configured = self.settings().get("notes_dir", "")
-        value = Path(configured).expanduser() if configured else workspace(self.app_root) / "Notes"
+        from .product import default_notes
+        value = Path(configured).expanduser() if configured else default_notes(workspace(self.app_root))
         if not value.is_absolute():
             value = workspace(self.app_root) / value
         value = Path(os.path.abspath(value))

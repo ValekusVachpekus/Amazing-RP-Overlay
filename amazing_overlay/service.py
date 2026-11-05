@@ -25,6 +25,8 @@ class Backend:
         self.browser_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="backend-job")
         self.jobs = {}
+        from .native_session import NativeRegistry
+        self.native = NativeRegistry()
         self.stopping = threading.Event()
         self.notes = Notes(root, data, load_settings)
         self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws")
@@ -72,7 +74,7 @@ class Backend:
         if method == "health":
             return {"version": 1, "app_version": __version__, "native_settings": True, "notes": True,
                     "shutdown": True, "stopping": self.stopping.is_set(), "chat_history": True, "citations": True,
-                    "full_ai_context": True,
+                    "full_ai_context": True, "native_sessions": True,
                     "documents": len(self.store.documents()), "data_dir": str(self.store.path.parent),
                     "browsers_dir": configure_browser_environment(), "import_warnings": self.import_warnings}
         if method == "shutdown":
@@ -83,6 +85,10 @@ class Backend:
             return {"stopping": True}
         if self.stopping.is_set():
             raise ValueError("Бэкенд останавливается. Дождитесь завершения и запустите его снова.")
+        if method == "native_register":
+            return self.native.register(params)
+        if method == "native_status":
+            return self.native.status(params["pid"], params["created"])
         if method.startswith("notes_"):
             return self.notes.dispatch(method, params)
         if method == "documents":

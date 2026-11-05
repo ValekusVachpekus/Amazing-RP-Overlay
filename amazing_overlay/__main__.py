@@ -11,6 +11,8 @@ from .browsers import configure_browser_environment
 
 
 def main():
+    from .product import runtime_guard
+    guard = runtime_guard()
     configure_browser_environment()
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["backend", "manager", "overlay", "launcher", "install-browser"], nargs="?", default="launcher")
@@ -56,6 +58,8 @@ def main():
             window.navigation_server = ManagerNavigation(window)
         else:
             window = BrowserInstaller() if args.mode == "install-browser" else OverlayWindow()
+            from .client_control import ClientControl
+            window.client_control = ClientControl(window, args.mode)
         if args.mode != "overlay":
             window.show()
     return app.exec()

@@ -1,4 +1,5 @@
 #include "rpc.h"
+#include "helper_version.h"
 #include "input_policy.h"
 #include "display_text.h"
 #include "settings_panel.h"
@@ -70,6 +71,27 @@ HWND gameWindow = nullptr;
 WNDPROC previousProc = nullptr;
 IDirect3DDevice9* activeDevice = nullptr;
 bool initialized = false;
+std::atomic<int> nativeStage{0};
+std::atomic<bool> nativeRuntimeChecked{false};
+HANDLE nativeGuard = nullptr;
+
+void NativeHeartbeat() {
+    FILETIME created{}, exited{}, kernel{}, user{};
+    GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+    auto identity = std::to_string((static_cast<unsigned long long>(created.dwHighDateTime) << 32) | created.dwLowDateTime);
+    for (;;) {
+        try {
+            if (Rpc("health").value("native_sessions", false)) {
+                int stage = nativeStage.load();
+                Rpc("native_register", {{"pid", GetCurrentProcessId()}, {"created", identity},
+                    {"version", AMAZING_HELPER_VERSION}, {"stage", stage == 1 ? "ready" : stage == 2 ? "error" : "initializing"},
+                    {"runtime_check", nativeRuntimeChecked.load()},
+                    {"error", stage == 2 ? "D3D9/hooks initialization failed; restart the game" : ""}});
+            }
+        } catch (...) { /* Backend can restart independently of the game. */ }
+        Sleep(2000);
+    }
+}
 SettingsPanel settingsPanel;
 TabNavigation navigation;
 constexpr wchar_t NativeInputOwner[]=L"AmazingLawOverlay.NativeInputOwner.v1";
@@ -912,6 +934,7 @@ HRESULT WINAPI EndScene(IDirect3DDevice9* device) {
             return originalEnd(device);
         }
         initialized = true;
+        nativeStage.store(1);
         if(!SetPropW(gameWindow,NativeInputOwner,reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(GetCurrentProcessId()))))Log("WARNING: could not publish native hotkey ownership");
         SetPropW(gameWindow,L"AmazingLawOverlay.NativeNotebookCommand.v1",reinterpret_cast<HANDLE>(1));
         Log("Renderer initialized; Ctrl+L shows panel; Alt+F enables input");
@@ -942,6 +965,20 @@ bool Hook(void* target, void* replacement, void** original) {
 }
 
 DWORD WINAPI Bootstrap(void*) {
+    std::thread(NativeHeartbeat).detach();
+    wchar_t testFlag[8]{}, image[32768]{};
+    GetModuleFileNameW(nullptr, image, 32768);
+    const wchar_t* base = wcsrchr(image, L'\\');
+    if (GetEnvironmentVariableW(L"AMAZING_OVERLAY_NATIVE_SELFTEST", testFlag, 8) &&
+        !_wcsicmp(base ? base + 1 : image, L"overlay_native_smoke.exe")) {
+        std::thread probe([] {
+            static thread_local std::string local = "manual-map-tls";
+            try { throw std::runtime_error(local); }
+            catch (const std::exception& error) { nativeRuntimeChecked.store(std::string(error.what()) == local); }
+        });
+        probe.join();
+        if (!nativeRuntimeChecked.load()) { nativeStage.store(2); return 1; }
+    }
     Log("Bootstrap entered; build " __DATE__ " " __TIME__ "; x86 D3D9 client");
     // Pin before installing callbacks: unloading a hooked module is unsafe.
     HMODULE pinned = nullptr;
@@ -1019,6 +1056,7 @@ DWORD WINAPI Bootstrap(void*) {
         for (void* target : ownedHooks) { MH_DisableHook(target); MH_RemoveHook(target); }
         OutputDebugStringW(L"AmazingLawClient: initialization failed; owned hooks removed.\n");
         Log("Initialization FAILED; only this client's hooks removed");
+        nativeStage.store(2);
         return 1;
     }
     std::thread(IoThread).detach();
@@ -1030,6 +1068,10 @@ DWORD WINAPI Bootstrap(void*) {
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
+        auto guardName = L"Local\\AmazingHelper.Native." + std::to_wstring(GetCurrentProcessId());
+        nativeGuard = CreateMutexW(nullptr, FALSE, guardName.c_str());
+        if (!nativeGuard) return FALSE;
+        if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(nativeGuard); nativeGuard = nullptr; return FALSE; }
         DisableThreadLibraryCalls(module);
         HANDLE thread = CreateThread(nullptr, 0, Bootstrap, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
