@@ -18,7 +18,7 @@ from .notes import Notes
 
 
 class Backend:
-    def __init__(self, data=DATA, root=ROOT):
+    def __init__(self, data=DATA, root=ROOT, import_legacy=True):
         configure_browser_environment()
         self.store = Store(data / "laws.db")
         self.lock = threading.RLock()
@@ -29,10 +29,10 @@ class Backend:
         self.native = NativeRegistry()
         self.stopping = threading.Event()
         self.notes = Notes(root, data, load_settings)
-        self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws")
+        self.import_warnings = self.store.import_legacy(root / "local" / "laws" if (root / "local" / "laws").exists() else root / "laws") if import_legacy else []
         urls = root / "local" / "urls.txt" if (root / "local" / "urls.txt").exists() else root / "urls.txt"
         if not self.store.get_preference("sources_initialized", False):
-            if urls.exists():
+            if import_legacy and urls.exists():
                 for line in urls.read_text(encoding="utf-8-sig").splitlines():
                     try:
                         self.store.add_source(line)

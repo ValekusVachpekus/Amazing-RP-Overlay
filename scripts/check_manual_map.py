@@ -27,7 +27,7 @@ def main():
         app = QCoreApplication([])
         processes = []
         try:
-            backend = subprocess.Popen([sys.executable, "-m", "amazing_overlay", "backend"], cwd=ROOT)
+            backend = subprocess.Popen([sys.executable, "-m", "amazing_overlay", "backend", "--no-legacy-import"], cwd=ROOT)
             processes.append(backend)
             for _ in range(100):
                 try:
@@ -35,6 +35,7 @@ def main():
                     break
                 except ConnectionError:
                     time.sleep(.1)
+            rpc("settings_save", {"notes_dir": str(Path(directory) / "Notes")})
             for cycle in range(2):
                 host = subprocess.Popen([str(native / "overlay_native_smoke.exe"), "--manual-map-host"], cwd=native)
                 processes.append(host)

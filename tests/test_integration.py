@@ -29,7 +29,7 @@ class IntegrationTest(unittest.TestCase):
         cls.app.setStyleSheet(STYLE)
         cls.temporary = tempfile.TemporaryDirectory()
         env = dict(os.environ, AMAZING_OVERLAY_DATA=cls.temporary.name, AMAZING_OVERLAY_PIPE=PIPE_NAME)
-        cls.process = subprocess.Popen([sys.executable, "-m", "amazing_overlay", "backend"], cwd=ROOT, env=env,
+        cls.process = subprocess.Popen([sys.executable, "-m", "amazing_overlay", "backend", "--no-legacy-import"], cwd=ROOT, env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
@@ -41,6 +41,11 @@ class IntegrationTest(unittest.TestCase):
                 store.publish({"schema_version": 1, "id": "test-table", "url": "", "title": "000 • Таблицы", "structured": True,
                                "pages": 1, "posts": [{"post_id": "table", "author": "", "blocks": parse_html(
                                    '<h3>Статья 12. Таблица</h3><table><tr><th rowspan="2">Ведомство</th><th colspan="2">Должности</th></tr><tr><th>Руководитель</th><th>Заместитель</th></tr><tr><td>МВД</td><td>Генерал</td><td>Полковник</td></tr></table>', "")} ]})
+                for ident, title in (("ci-law-a", "Тестовый кодекс А"), ("ci-law-b", "Тестовый кодекс Б")):
+                    store.publish({"schema_version": 1, "id": ident, "url": "", "title": title, "structured": True,
+                        "pages": 1, "posts": [{"post_id": ident, "author": "", "blocks": parse_html(
+                            '<h3>Статья 1. Задержание</h3><p>Синтетический текст для проверки поиска и переключения документов.</p>', "")} ]})
+                store.add_source("https://forum.amazing-online.com/threads/test-fixture.1000001/")
                 rpc("settings_save", {"notes_dir": str(Path(cls.temporary.name) / "notes")})
                 rpc("notes_create", {"path": "Пример.txt", "text": "Мои игровые заметки\n\nСтатья 12 — пример записи.\nМожно читать закон и писать рядом.\n\nРусский текст, поиск, сохранение и отмена изменений."})
                 rpc("state_set", {"key": "notebook-native", "value": {"path": "Пример.txt"}})
@@ -492,7 +497,7 @@ class IntegrationTest(unittest.TestCase):
         pipe = 'amazing-desktop-stop-' + uuid.uuid4().hex
         with tempfile.TemporaryDirectory(prefix='Amazing тест ') as directory:
             env = dict(os.environ, AMAZING_OVERLAY_PIPE=pipe, AMAZING_OVERLAY_DATA=directory)
-            process = subprocess.Popen([sys.executable, '-m', 'amazing_overlay', 'backend'], cwd=directory, env=dict(env, PYTHONPATH=str(ROOT)),
+            process = subprocess.Popen([sys.executable, '-m', 'amazing_overlay', 'backend', '--no-legacy-import'], cwd=directory, env=dict(env, PYTHONPATH=str(ROOT)),
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             with patch.object(transport, 'PIPE_NAME', pipe):
                 try:
@@ -504,7 +509,7 @@ class IntegrationTest(unittest.TestCase):
                     self.assertEqual(process.returncode, 0)
                     process.communicate(timeout=5)
                     self.assertEqual((Path(directory) / 'Notes/Запись.txt').read_text(encoding='utf-8'), 'Сохранено перед остановкой')
-                    process = subprocess.Popen([sys.executable, '-m', 'amazing_overlay', 'backend'], cwd=directory,
+                    process = subprocess.Popen([sys.executable, '-m', 'amazing_overlay', 'backend', '--no-legacy-import'], cwd=directory,
                                                env=dict(env, PYTHONPATH=str(ROOT)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     self.events_until(lambda: self.backend_reachable(transport), timeout=20)
                     self.assertEqual(transport.rpc('notes_read', {'path': 'Запись.txt'})['text'], 'Сохранено перед остановкой')

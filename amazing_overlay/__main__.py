@@ -15,6 +15,7 @@ def main():
     guard = runtime_guard()
     configure_browser_environment()
     parser = argparse.ArgumentParser()
+    parser.add_argument("--no-legacy-import", action="store_true", help="Не импортировать прежние локальные законы/ссылки (изолированные проверки)")
     parser.add_argument("mode", choices=["backend", "manager", "overlay", "launcher", "install-browser"], nargs="?", default="launcher")
     parser.add_argument("--page", choices=["sources", "update", "ai", "appearance", "diagnostics"], default="sources", help="Начальный раздел менеджера")
     args = parser.parse_args()
@@ -29,7 +30,7 @@ def main():
             return 0
         from .service import Backend
         from .transport import RpcServer
-        backend = Backend()
+        backend = Backend(import_legacy=not args.no_legacy_import)
         server = RpcServer(backend)
         if not server.listen():
             backend.close()
