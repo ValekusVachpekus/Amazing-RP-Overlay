@@ -32,12 +32,27 @@ add_library(overlay_imgui STATIC
 target_include_directories(overlay_imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(overlay_imgui PUBLIC d3d9 dwmapi)
 add_library(AmazingLawClient SHARED client.cpp rpc.cpp document_renderer.cpp settings_panel.cpp)
-target_include_directories(AmazingLawClient PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-target_compile_definitions(AmazingLawClient PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX DIRECTINPUT_VERSION=0x0800)
-target_link_libraries(AmazingLawClient PRIVATE overlay_imgui minhook nlohmann_json::nlohmann_json d3d9 dinput8 dxguid user32 shell32)
-if(MSVC)
-  target_compile_options(AmazingLawClient PRIVATE /utf-8 /W4 /permissive-)
-endif()
+# Static TLS experiments must never change the production game's TLS layout.
+add_library(overlay_tls_fixture SHARED client.cpp rpc.cpp document_renderer.cpp settings_panel.cpp)
+target_compile_definitions(overlay_tls_fixture PRIVATE AMAZING_OVERLAY_TLS_SELFTEST)
+set_target_properties(overlay_tls_fixture PROPERTIES OUTPUT_NAME AmazingLawClient
+  RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:AmazingLawClient>/tls-fixture"
+  ARCHIVE_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:AmazingLawClient>/tls-fixture")
+foreach(clientTarget AmazingLawClient overlay_tls_fixture)
+  target_include_directories(${clientTarget} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+  target_compile_definitions(${clientTarget} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX DIRECTINPUT_VERSION=0x0800)
+  target_link_libraries(${clientTarget} PRIVATE overlay_imgui minhook nlohmann_json::nlohmann_json d3d9 dinput8 dxguid user32 shell32)
+  if(MSVC)
+    target_compile_options(${clientTarget} PRIVATE /utf-8 /W4 /permissive-)
+  endif()
+endforeach()
+add_executable(overlay_tls_injector WIN32 injector.cpp)
+target_include_directories(overlay_tls_injector PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_compile_definitions(overlay_tls_injector PRIVATE AMAZING_HELPER_TEST_HOST)
+target_compile_options(overlay_tls_injector PRIVATE /utf-8)
+target_link_libraries(overlay_tls_injector PRIVATE blackbone_user nlohmann_json::nlohmann_json bcrypt shell32)
+set_target_properties(overlay_tls_injector PROPERTIES OUTPUT_NAME overlay_test_injector
+  RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:AmazingLawClient>/tls-fixture")
 add_custom_command(TARGET AmazingLawClient POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:AmazingLawClient> $<TARGET_FILE_DIR:AmazingLawClient>/AmazingLawClient.asi)
 add_executable(overlay_native_smoke WIN32 smoke.cpp)

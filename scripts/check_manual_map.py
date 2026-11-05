@@ -36,15 +36,17 @@ def main():
                 except ConnectionError:
                     time.sleep(.1)
             rpc("settings_save", {"notes_dir": str(Path(directory) / "Notes")})
-            for cycle in range(2):
+            for cycle in range(4):
+                tls_fixture = cycle >= 2
+                artifacts = native / "tls-fixture" if tls_fixture else native
                 host = subprocess.Popen([str(native / "overlay_native_smoke.exe"), "--manual-map-host"], cwd=native)
                 processes.append(host)
                 time.sleep(.5)
                 if host.poll() is not None:
                     raise RuntimeError("D3D9 host unavailable, exit=" + str(host.returncode))
                 game = process_info(host.pid)
-                command = [str(native / "overlay_test_injector.exe"), "--pid", str(game.pid), "--created", game.created,
-                           "--image", game.path, "--sha256", hashlib.sha256((native / "AmazingLawClient.dll").read_bytes()).hexdigest()]
+                command = [str(artifacts / "overlay_test_injector.exe"), "--pid", str(game.pid), "--created", game.created,
+                           "--image", game.path, "--sha256", hashlib.sha256((artifacts / "AmazingLawClient.dll").read_bytes()).hexdigest()]
                 result = subprocess.run(command, cwd=native, capture_output=True, timeout=60)
                 assert result.returncode == 0, result.stdout.decode("utf-8", errors="replace")
                 identity = {"pid": game.pid, "created": game.created}
@@ -55,7 +57,7 @@ def main():
                     status = rpc("native_status", identity)
                     if status and status["stage"] == "ready":
                         assert status["version"] == __version__
-                        assert status["runtime_check"], "TLS/thread/C++ exception probe did not complete"
+                        assert status["runtime_check"] == tls_fixture, "TLS probe must run only in the isolated test DLL"
                         break
                     time.sleep(.2)
                 else:
@@ -67,7 +69,7 @@ def main():
                 host.wait(timeout=10)
             stop_backend()
             backend.wait(timeout=10)
-            print("MANUAL MAP: PASS; two own-host lifecycles, ready RPC, duplicate rejected")
+            print("MANUAL MAP: PASS; production DLL and isolated TLS fixture, four own-host lifecycles, ready RPC, duplicate rejected")
         finally:
             for process in processes:
                 if process.poll() is None:

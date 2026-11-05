@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import sys
+import pefile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,14 @@ def main():
     parser.add_argument("--skip-freeze", action="store_true")
     args = parser.parse_args()
     native = args.native_dir.resolve()
+    native_image = pefile.PE(str(native / "AmazingLawClient.dll"))
+    exports = getattr(native_image, "DIRECTORY_ENTRY_EXPORT", None)
+    if exports and any(symbol.name == b"AmazingOverlayTlsFixtureTag" for symbol in exports.symbols):
+        raise ValueError("TLS self-test fixture cannot be shipped as the production DLL")
+    tls = getattr(native_image, "DIRECTORY_ENTRY_TLS", None)
+    if tls and tls.struct.EndAddressOfRawData - tls.struct.StartAddressOfRawData > 8:
+        raise ValueError("Production DLL exceeds the established 8-byte static TLS baseline; test TLS belongs in tls-fixture")
+    native_image.close()
     probe = subprocess.run([str(native / "AmazingHelperInjector.exe"), "--version"], capture_output=True, check=True)
     if json.loads(probe.stdout)["version"] != __version__:
         raise ValueError("Native version does not match the Python version")

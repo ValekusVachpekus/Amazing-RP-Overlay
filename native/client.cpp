@@ -42,6 +42,7 @@ struct State {
     std::condition_variable wake;
     std::deque<std::function<void()>> queue;
     std::string status = "Подключение к бэкенду…", answer, job;
+    std::string nativeError;
     Json documents = Json::array(), hits = Json::array(), sources = Json::array();
     Json preferences = Json::object(), settings = Json::object();
     unsigned settingsRevision = 0;
@@ -79,18 +80,17 @@ void NativeHeartbeat() {
     FILETIME created{}, exited{}, kernel{}, user{};
     GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
     auto identity = std::to_string((static_cast<unsigned long long>(created.dwHighDateTime) << 32) | created.dwLowDateTime);
-    for (;;) {
-        try {
+    try {
             if (Rpc("health").value("native_sessions", false)) {
                 int stage = nativeStage.load();
+                std::string error;
+                { std::lock_guard<std::mutex> lock(S().mutex); error = S().nativeError; }
                 Rpc("native_register", {{"pid", GetCurrentProcessId()}, {"created", identity},
                     {"version", AMAZING_HELPER_VERSION}, {"stage", stage == 1 ? "ready" : stage == 2 ? "error" : "initializing"},
                     {"runtime_check", nativeRuntimeChecked.load()},
-                    {"error", stage == 2 ? "D3D9/hooks initialization failed; restart the game" : ""}});
+                    {"error", stage == 2 ? (error.empty() ? "D3D9/hooks initialization failed; restart the game" : error) : ""}});
             }
-        } catch (...) { /* Backend can restart independently of the game. */ }
-        Sleep(2000);
-    }
+    } catch (...) { /* Backend can restart independently of the game. */ }
 }
 SettingsPanel settingsPanel;
 TabNavigation navigation;
@@ -328,7 +328,12 @@ void OpenCitation(const Json& source) {
 void IoThread() {
     auto& state = S();
     ULONGLONG lastChatSave=0;
+    ULONGLONG lastHeartbeat=0;
     for (;;) {
+        if (GetTickCount64() - lastHeartbeat >= 2000) {
+            NativeHeartbeat();
+            lastHeartbeat = GetTickCount64();
+        }
         try {
             std::function<void()> work;
             {
@@ -957,15 +962,36 @@ HRESULT WINAPI Reset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* parameters
     return result;
 }
 
-bool Hook(void* target, void* replacement, void** original) {
+bool Hook(void* target, void* replacement, void** original, const char* name) {
     auto result = MH_CreateHook(target, replacement, original);
-    if (result != MH_OK) { Status(std::string("MH_CreateHook: ") + MH_StatusToString(result)); return false; }
+    if (result != MH_OK) {
+        auto memory = [](void* address) {
+            MEMORY_BASIC_INFORMATION info{};
+            SIZE_T queried = VirtualQuery(address, &info, sizeof(info));
+            std::ostringstream out;
+            out << "address=" << address << " query=" << (queried ? "ok" : "failed")
+                << " state=0x" << std::hex << info.State << " protect=0x" << info.Protect
+                << " executable=" << ((queried && info.State == MEM_COMMIT && (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) ? "yes" : "no");
+            return out.str();
+        };
+        auto error = std::string(name) + ": " + MH_StatusToString(result) + "; target " + memory(target) + "; detour " + memory(replacement);
+        { std::lock_guard<std::mutex> lock(S().mutex); S().nativeError = error; }
+        Status(error);
+        return false;
+    }
     ownedHooks.push_back(target);
     return true;
 }
 
 DWORD WINAPI Bootstrap(void*) {
-    std::thread(NativeHeartbeat).detach();
+    // Keep DllMain identical to the established loader-safe entry path. Avoid
+    // CRT allocations and extra RPC threads while the mapper holds loader state.
+    wchar_t guardName[64]{};
+    swprintf_s(guardName, L"Local\\AmazingHelper.Native.%lu", GetCurrentProcessId());
+    nativeGuard = CreateMutexW(nullptr, FALSE, guardName);
+    if (!nativeGuard) return 1;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(nativeGuard); nativeGuard = nullptr; return 1; }
+#ifdef AMAZING_OVERLAY_TLS_SELFTEST
     wchar_t testFlag[8]{}, image[32768]{};
     GetModuleFileNameW(nullptr, image, 32768);
     const wchar_t* base = wcsrchr(image, L'\\');
@@ -979,6 +1005,7 @@ DWORD WINAPI Bootstrap(void*) {
         probe.join();
         if (!nativeRuntimeChecked.load()) { nativeStage.store(2); return 1; }
     }
+#endif
     Log("Bootstrap entered; build " __DATE__ " " __TIME__ "; x86 D3D9 client");
     // Pin before installing callbacks: unloading a hooked module is unsafe.
     HMODULE pinned = nullptr;
@@ -1005,13 +1032,13 @@ DWORD WINAPI Bootstrap(void*) {
         auto hookInit = MH_Initialize();
         if (hookInit == MH_OK) {
             Status("Hooking EndScene / Reset");
-            success = Hook(table[42], reinterpret_cast<void*>(EndScene), reinterpret_cast<void**>(&originalEnd)) &&
-                      Hook(table[16], reinterpret_cast<void*>(Reset), reinterpret_cast<void**>(&originalReset));
+            success = Hook(table[42], reinterpret_cast<void*>(EndScene), reinterpret_cast<void**>(&originalEnd), "EndScene") &&
+                      Hook(table[16], reinterpret_cast<void*>(Reset), reinterpret_cast<void**>(&originalReset), "Reset");
             if (success) {
                 Status("Hooking game cursor recenter / clip");
                 auto user32 = GetModuleHandleW(L"user32.dll");
-                success = user32 && Hook(reinterpret_cast<void*>(GetProcAddress(user32, "SetCursorPos")), reinterpret_cast<void*>(CursorPosition), reinterpret_cast<void**>(&originalSetCursorPos)) &&
-                          Hook(reinterpret_cast<void*>(GetProcAddress(user32, "ClipCursor")), reinterpret_cast<void*>(CursorClip), reinterpret_cast<void**>(&originalClipCursor));
+                success = user32 && Hook(reinterpret_cast<void*>(GetProcAddress(user32, "SetCursorPos")), reinterpret_cast<void*>(CursorPosition), reinterpret_cast<void**>(&originalSetCursorPos), "SetCursorPos") &&
+                          Hook(reinterpret_cast<void*>(GetProcAddress(user32, "ClipCursor")), reinterpret_cast<void*>(CursorClip), reinterpret_cast<void**>(&originalClipCursor), "ClipCursor");
             }
             IDirectInput8W* input = nullptr;
             IDirectInputDevice8W* keyboard = nullptr;
@@ -1022,13 +1049,13 @@ DWORD WINAPI Bootstrap(void*) {
             if (success && SUCCEEDED(keyboardResult)) {
                 Status("Hooking DirectInput state / buffered data");
                 auto** keys = *reinterpret_cast<void***>(keyboard);
-                success = Hook(keys[9], reinterpret_cast<void*>(GetState), reinterpret_cast<void**>(&originalState)) &&
-                          Hook(keys[10], reinterpret_cast<void*>(GetData), reinterpret_cast<void**>(&originalData));
+                success = Hook(keys[9], reinterpret_cast<void*>(GetState), reinterpret_cast<void**>(&originalState), "Keyboard.GetDeviceState") &&
+                          Hook(keys[10], reinterpret_cast<void*>(GetData), reinterpret_cast<void**>(&originalData), "Keyboard.GetDeviceData");
                 HRESULT mouseResult = success ? input->CreateDevice(GUID_SysMouse, &mouse, nullptr) : E_FAIL;
                 if (success && SUCCEEDED(mouseResult)) {
                     auto** mouseTable = *reinterpret_cast<void***>(mouse);
-                    if (mouseTable[9] != keys[9]) success = Hook(mouseTable[9], reinterpret_cast<void*>(GetMouseState), reinterpret_cast<void**>(&originalMouseState));
-                    if (success && mouseTable[10] != keys[10]) success = Hook(mouseTable[10], reinterpret_cast<void*>(GetMouseData), reinterpret_cast<void**>(&originalMouseData));
+                    if (mouseTable[9] != keys[9]) success = Hook(mouseTable[9], reinterpret_cast<void*>(GetMouseState), reinterpret_cast<void**>(&originalMouseState), "Mouse.GetDeviceState");
+                    if (success && mouseTable[10] != keys[10]) success = Hook(mouseTable[10], reinterpret_cast<void*>(GetMouseData), reinterpret_cast<void**>(&originalMouseData), "Mouse.GetDeviceData");
                 } else { if (success) Log("ERROR: CreateDevice mouse " + HResult(mouseResult)); success = false; }
             } else { if (success) Log("ERROR: CreateDevice keyboard " + HResult(keyboardResult)); success = false; }
             if (keyboard) keyboard->Release();
@@ -1056,7 +1083,9 @@ DWORD WINAPI Bootstrap(void*) {
         for (void* target : ownedHooks) { MH_DisableHook(target); MH_RemoveHook(target); }
         OutputDebugStringW(L"AmazingLawClient: initialization failed; owned hooks removed.\n");
         Log("Initialization FAILED; only this client's hooks removed");
+        { std::lock_guard<std::mutex> lock(S().mutex); if (S().nativeError.empty()) S().nativeError = S().status; }
         nativeStage.store(2);
+        NativeHeartbeat();
         return 1;
     }
     std::thread(IoThread).detach();
@@ -1068,10 +1097,6 @@ DWORD WINAPI Bootstrap(void*) {
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
-        auto guardName = L"Local\\AmazingHelper.Native." + std::to_wstring(GetCurrentProcessId());
-        nativeGuard = CreateMutexW(nullptr, FALSE, guardName.c_str());
-        if (!nativeGuard) return FALSE;
-        if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(nativeGuard); nativeGuard = nullptr; return FALSE; }
         DisableThreadLibraryCalls(module);
         HANDLE thread = CreateThread(nullptr, 0, Bootstrap, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
@@ -1081,6 +1106,9 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
 }
 
 // Diagnostics for the standalone test host, not a game loader or injector.
+#ifdef AMAZING_OVERLAY_TLS_SELFTEST
+extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayTlsFixtureTag() { return 1; }
+#endif
 extern "C" __declspec(dllexport) unsigned __cdecl AmazingOverlayProbe() {
     std::lock_guard<std::mutex> lock(S().mutex);
     return (initialized ? 1u : 0u) | (!S().documents.empty() ? 2u : 0u);
