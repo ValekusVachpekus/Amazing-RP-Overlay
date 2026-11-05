@@ -214,6 +214,9 @@ class ClientSafetyTests(unittest.TestCase):
                 inject.assert_not_called()
             finally:
                 window.close()
+                previous = len(calls)
+                window.check_updates()
+                self.assertEqual(len(calls), previous, "Closed launchers cannot start delayed update requests")
 
 
 if __name__ == "__main__":

@@ -59,7 +59,27 @@ class IntegrationTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.process.terminate()
+        from PySide6.QtCore import QEvent, QTimer
+        from amazing_overlay.transport import _active_work
+        windows = cls.app.topLevelWidgets()
+        for window in windows:
+            cls.app.removeEventFilter(window)
+        # These offscreen widgets intentionally have no real Win32 HWND.
+        with patch("amazing_overlay.ui.set_input"), patch("amazing_overlay.ui.activate"):
+            for window in windows:
+                for timer in window.findChildren(QTimer):
+                    timer.stop()
+                window.close()
+                window.hide()
+        deadline = time.monotonic() + 15
+        while _active_work and time.monotonic() < deadline:
+            cls.app.processEvents()
+            time.sleep(.01)
+        for window in windows:
+            window.deleteLater()
+        cls.app.sendPostedEvents(None, QEvent.DeferredDelete)
+        from amazing_overlay.transport import stop_backend
+        stop_backend(timeout=15)
         cls.process.communicate(timeout=5)
         cls.temporary.cleanup()
 

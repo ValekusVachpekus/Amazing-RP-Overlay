@@ -359,6 +359,8 @@ class LauncherWindow(QMainWindow):
         background(find_games, selected, failed)
 
     def setup_installed_notes(self):
+        if self.closed:
+            return
         from .settings import load_settings
         def loaded(settings):
             if self.closed or settings.get("notes_dir"):
@@ -391,7 +393,7 @@ class LauncherWindow(QMainWindow):
         background(load_settings, loaded, self.show_error)
 
     def check_updates(self):
-        if self.update_busy:
+        if self.update_busy or self.closed:
             return
         from .updates import check_update
         self.update_busy = True
@@ -415,7 +417,7 @@ class LauncherWindow(QMainWindow):
         background(check_update, done, failed)
 
     def install_update(self):
-        if not self.available_update or self.update_busy or self.native_busy or self.operation or self.notes_pending:
+        if self.closed or not self.available_update or self.update_busy or self.native_busy or self.operation or self.notes_pending:
             return
         from .product import installed
         update = self.available_update
