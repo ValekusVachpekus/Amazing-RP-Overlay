@@ -52,6 +52,17 @@ def main():
         assert all(p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() == digest for p, digest in snapshots.items()), "Personal fixtures changed"
         with sqlite3.connect(data / "laws.db") as db:
             assert db.execute("SELECT value FROM installer_fixture").fetchall() == [("preserved",)]
+    def uninstall():
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            command = winreg.QueryValueEx(key, "UninstallString")[0]
+        executable = Path(command.strip('"')).resolve()
+        assert executable.parent == app.resolve() and executable.name.startswith("unins") and executable.suffix == ".exe"
+        result = subprocess.run([str(executable), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], timeout=120)
+        assert result.returncode == 0
+        deadline = time.monotonic() + 20
+        while executable.exists() and time.monotonic() < deadline:
+            time.sleep(.1)
+        assert not executable.exists(), "Uninstaller has not finished removing its original executable"
     setup("install")
     assert (app / "AmazingHelper.exe").is_file() and (app / "installed.json").is_file()
     preserved()
@@ -75,15 +86,13 @@ def main():
     personal = app / "Notes" / "preserve.txt"
     personal.parent.mkdir(exist_ok=True)
     personal.write_bytes(b"unmanaged personal note")
-    result = subprocess.run([str(app / "unins000.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], timeout=120)
-    assert result.returncode == 0
+    uninstall()
     preserved()
     assert personal.read_bytes() == b"unmanaged personal note"
     assert not (app / "AmazingHelper.exe").exists()
     setup("reinstall")
     preserved()
-    result = subprocess.run([str(app / "unins000.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], timeout=120)
-    assert result.returncode == 0
+    uninstall()
     preserved()
     print("INSTALLER: PASS; install, busy refusal, repair, uninstall, reinstall; personal fixtures preserved")
 
