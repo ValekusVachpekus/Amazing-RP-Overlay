@@ -112,6 +112,12 @@ def main():
                         assert forwarded.returncode == 0, "Settings navigation must reuse the running manager"
                         assert client.poll() is None, "The original manager must remain open"
                         print("PORTABLE MANAGER NAVIGATION: PASS")
+                    if mode == "overlay":
+                        from amazing_overlay.client_control import request_close
+                        request_close("overlay")
+                        client.wait(timeout=15)
+                        assert client.returncode == 0, "Overlay must close cooperatively before an update"
+                        print("PORTABLE CLIENT UPDATE HANDSHAKE: PASS")
                 finally:
                     if client.poll() is None:
                         client.terminate()

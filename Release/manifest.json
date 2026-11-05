@@ -1,11 +1,11 @@
 {
   "format": 1,
   "version": "2.8.0",
-  "source_revision": "3d2e42f6be3facc5f410fde7a9e3cc57e2d77c6e",
+  "source_revision": "d70040c16b27260f37901cbcb963b5cc49f56487",
   "files": {
     "AmazingHelper.exe": {
-      "bytes": 9132446,
-      "sha256": "f62a6f675891584ff8ef1fff0462b9df565e8faf017b18c7939c787612480424"
+      "bytes": 9132538,
+      "sha256": "39c9b81ac52cfc1c61ea7aae9487cc727f184944cb926615b690c3f9c07ec5ad"
     },
     "AmazingHelperInjector.exe": {
       "bytes": 565760,
@@ -853,7 +853,7 @@
     },
     "_internal/base_library.zip": {
       "bytes": 1333418,
-      "sha256": "8d245a9383912867817a238a7f912d80d3e19942cb9e1ffba67d8f1f562e807e"
+      "sha256": "ab3c0f65a87f1f46a05d300ec303a275ae3ad3bdcf31b2a6dde66fa98e4cbb5c"
     },
     "_internal/beautifulsoup4-4.15.0.dist-info/INSTALLER": {
       "bytes": 4,
