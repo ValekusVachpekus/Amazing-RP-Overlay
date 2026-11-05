@@ -1,11 +1,11 @@
 {
   "format": 1,
   "version": "2.8.0",
-  "source_revision": "760e8591943b1e5f1ad4cbd595a624fd116b9246",
+  "source_revision": "ae749fcadb866a0c4bba13b844353a57997c2f8a",
   "files": {
     "AmazingHelper.exe": {
-      "bytes": 9181894,
-      "sha256": "bfc0354324cba36685dec88f5824d4c562d23737cba5ff908ce98f9170580f3f"
+      "bytes": 9206125,
+      "sha256": "05816dfd4b966c991d3f64bf2ff3c18c91cf454bfaaa60a2bfd9a160c893e550"
     },
     "AmazingHelperInjector.exe": {
       "bytes": 565760,
@@ -679,6 +679,18 @@
       "bytes": 50544,
       "sha256": "265c280dd685af8782b1d632e2bec47cd83dc0e945a59a7cedeffa45943a3220"
     },
+    "_internal/amazing_overlay/assets/ICON.md": {
+      "bytes": 1502,
+      "sha256": "eb75a1043584b80da89523aadd4d9b1b4ad50c3a14f46cee0f8e08bd50f73729"
+    },
+    "_internal/amazing_overlay/assets/amazing-helper.ico": {
+      "bytes": 84684,
+      "sha256": "af84f189910592ef6c52d45d2e50911fd5f5888a6463b0242e9f0b11b8c542af"
+    },
+    "_internal/amazing_overlay/assets/amazing-helper.png": {
+      "bytes": 1189805,
+      "sha256": "416cfdb57a1d9279ca43563f558322f914cbf92fcb4c66860c99bcb9250443a7"
+    },
     "_internal/amazing_overlay/assets/check.svg": {
       "bytes": 204,
       "sha256": "57e793f572bc0972445206afb728fb1696a9711b1615b11d14346af789e94dcf"
@@ -853,7 +865,7 @@
     },
     "_internal/base_library.zip": {
       "bytes": 1333418,
-      "sha256": "b889d6e522427abd43cfa79addb0d0b262b7177db4ab56193c85ac7fc1e6f315"
+      "sha256": "33a416be72c0d2f5e7d67241213df4c6f44f390cbdd110f119fb0b377e5b47b7"
     },
     "_internal/beautifulsoup4-4.15.0.dist-info/INSTALLER": {
       "bytes": 4,
