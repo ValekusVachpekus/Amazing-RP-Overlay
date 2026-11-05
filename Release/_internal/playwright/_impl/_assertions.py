@@ -17,16 +17,16 @@ from contextlib import contextmanager
 from typing import Any, Iterator, List, Literal, Optional, Pattern, Sequence, Union
 from urllib.parse import urljoin
 
-from playwright._impl._api_structures import (
+from playwright._impl._connection import format_call_log
+from playwright._impl._errors import Error
+from playwright._impl._fetch import APIResponse
+from playwright._impl._helper import is_textual_mime_type
+from playwright._impl._internal_structures import (
     AriaRole,
     ExpectedTextValue,
     FrameExpectOptions,
     FrameExpectResult,
 )
-from playwright._impl._connection import format_call_log
-from playwright._impl._errors import Error
-from playwright._impl._fetch import APIResponse
-from playwright._impl._helper import is_textual_mime_type
 from playwright._impl._js_handle import parse_value
 from playwright._impl._locator import Locator
 from playwright._impl._page import Page
@@ -1103,7 +1103,8 @@ def to_expected_text_values(
     ignoreCase: Optional[bool] = None,
 ) -> Sequence[ExpectedTextValue]:
     out: List[ExpectedTextValue] = []
-    assert isinstance(items, (list, tuple))
+    if not isinstance(items, (list, tuple)):
+        raise Error("Expected a list or tuple of strings or patterns")
     for item in items:
         if isinstance(item, str):
             o = ExpectedTextValue(

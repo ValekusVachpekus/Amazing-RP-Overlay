@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import traceback
-from typing import Awaitable, Callable, Dict
-
-import greenlet
+from typing import Any, Awaitable, Callable, Coroutine, Dict
 
 from playwright._impl._connection import ChannelOwner, _capture_stack_trace
 from playwright._impl._errors import Error, is_target_closed_error
+from playwright._impl._greenlets import connection_closed_error, wait_for_future
 
 
 class Disposable(ChannelOwner):
@@ -70,23 +68,22 @@ class DisposableStub:
     def __exit__(self, *args: object) -> None:
         self._sync(self.dispose())
 
-    def _sync(self, coro: object) -> object:
+    def _sync(self, coro: Coroutine[Any, Any, Any]) -> object:
         __tracebackhide__ = True
         if self._loop.is_closed():
-            coro.close()  # type: ignore
+            coro.close()
             raise Error("Event loop is closed! Is Playwright already stopped?")
-        g_self = greenlet.getcurrent()
-        task = self._loop.create_task(coro)  # type: ignore
+        if self._dispatcher_fiber.dead:
+            coro.close()
+            raise connection_closed_error()
+        task = self._loop.create_task(coro)
         setattr(
             task,
             "__pw_stack__",
             _capture_stack_trace(),
         )
         setattr(task, "__pw_stack_trace__", traceback.extract_stack(limit=10))
-        task.add_done_callback(lambda _: g_self.switch())
-        while not task.done():
-            self._dispatcher_fiber.switch()  # type: ignore
-        asyncio._set_running_loop(self._loop)
+        wait_for_future(self._loop, self._dispatcher_fiber, task)
         return task.result()
 
     async def close(self) -> None:

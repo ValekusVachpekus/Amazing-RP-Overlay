@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-start "" AmazingLawOverlay.exe overlay
+start "" AmazingHelper.exe overlay
