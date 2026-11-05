@@ -20,6 +20,7 @@ from amazing_overlay.transport import rpc
 class IntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        (ROOT / ".cache").mkdir(exist_ok=True)
         cls.app = QApplication.instance() or QApplication([])
         from amazing_overlay.ui import STYLE
         font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "segoeui.ttf"
