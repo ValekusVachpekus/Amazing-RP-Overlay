@@ -35,10 +35,14 @@ jobs:
       - name: Python checks
         run: |
           .venv/Scripts/python.exe -m unittest discover -s tests -v
+          Write-Output "unittest exit code: $LASTEXITCODE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output 'Compile legacy entry point'
           .venv/Scripts/python.exe -m py_compile legacy/law_overlay.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output 'Run isolated legacy smoke'
           .venv/Scripts/python.exe legacy/test_overlay_linux.py --smoke
+          Write-Output "legacy smoke exit code: $LASTEXITCODE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native x86 build and tests
         run: |
