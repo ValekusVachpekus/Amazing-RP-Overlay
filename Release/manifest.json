@@ -1,23 +1,23 @@
 {
   "format": 1,
   "version": "2.8.0",
-  "source_revision": "2ed8c1248396a224f13509474a68d78f3b2a7362",
+  "source_revision": "760e8591943b1e5f1ad4cbd595a624fd116b9246",
   "files": {
     "AmazingHelper.exe": {
-      "bytes": 9132538,
-      "sha256": "39c9b81ac52cfc1c61ea7aae9487cc727f184944cb926615b690c3f9c07ec5ad"
+      "bytes": 9181894,
+      "sha256": "bfc0354324cba36685dec88f5824d4c562d23737cba5ff908ce98f9170580f3f"
     },
     "AmazingHelperInjector.exe": {
       "bytes": 565760,
-      "sha256": "d1ac861398f1a8181c78faa6ba4ed31f3ad4b88a31a65b72344518a131d0cf78"
+      "sha256": "cbaab3897df945c5e94aeefad68273b6808c6101fdbbec4824db48af87fe774f"
     },
     "AmazingLawClient.asi": {
       "bytes": 1171456,
-      "sha256": "d5822a041c496a06beb1f7ad8b1dcaf1a35933509a72a2cb2a2a71cf7a8ee08a"
+      "sha256": "722534a562f4ace9a857e25428fe9644260f8c484b5091af6cd5b87337cf1e94"
     },
     "AmazingLawClient.dll": {
       "bytes": 1171456,
-      "sha256": "d5822a041c496a06beb1f7ad8b1dcaf1a35933509a72a2cb2a2a71cf7a8ee08a"
+      "sha256": "722534a562f4ace9a857e25428fe9644260f8c484b5091af6cd5b87337cf1e94"
     },
     "README.md": {
       "bytes": 4911,
@@ -853,7 +853,7 @@
     },
     "_internal/base_library.zip": {
       "bytes": 1333418,
-      "sha256": "ab3c0f65a87f1f46a05d300ec303a275ae3ad3bdcf31b2a6dde66fa98e4cbb5c"
+      "sha256": "b889d6e522427abd43cfa79addb0d0b262b7177db4ab56193c85ac7fc1e6f315"
     },
     "_internal/beautifulsoup4-4.15.0.dist-info/INSTALLER": {
       "bytes": 4,
@@ -7984,8 +7984,8 @@
       "sha256": "e7fe7ae7342b1dec8dfe52a95d768039a46189209b9f42a21c4d2473faaa1753"
     },
     "docs/DISTRIBUTION.md": {
-      "bytes": 8737,
-      "sha256": "188178768d7c874ac40dca9b2eb554479abbbcceea65dd807808fd5cb24df013"
+      "bytes": 9957,
+      "sha256": "bad7e615395dff2ed58f7d74f43855571f7914540ec9e1b2c573d0a765e8f3e3"
     },
     "docs/GAME_ACCEPTANCE.md": {
       "bytes": 10350,
