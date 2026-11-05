@@ -46,10 +46,6 @@ Source: "installed.json"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\AmazingHelper"; Filename: "{app}\AmazingHelper.exe"; WorkingDir: "{app}"
 Name: "{autodesktop}\AmazingHelper"; Filename: "{app}\AmazingHelper.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
-[InstallDelete]
-; Only runtime-owned files. Notes, local data and user-selected paths are excluded.
-Type: filesandordirs; Name: "{app}\_internal"
-
 [Run]
 Filename: "{app}\AmazingHelper.exe"; Description: "Открыть AmazingHelper"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
