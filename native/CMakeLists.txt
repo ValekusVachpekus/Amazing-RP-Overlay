@@ -56,6 +56,12 @@ set_target_properties(overlay_tls_injector PROPERTIES OUTPUT_NAME overlay_test_i
 add_custom_command(TARGET AmazingLawClient POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:AmazingLawClient> $<TARGET_FILE_DIR:AmazingLawClient>/AmazingLawClient.asi)
 add_executable(overlay_native_smoke WIN32 smoke.cpp)
+# Exercise legacy x86 processes without DEP as well as the default DEP-on host.
+add_executable(overlay_native_smoke_dep_off WIN32 smoke.cpp)
+target_compile_definitions(overlay_native_smoke_dep_off PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN AMAZING_HOST_DEP_OFF)
+target_compile_options(overlay_native_smoke_dep_off PRIVATE /utf-8)
+target_link_options(overlay_native_smoke_dep_off PRIVATE /NXCOMPAT:NO)
+target_link_libraries(overlay_native_smoke_dep_off PRIVATE d3d9 user32)
 add_executable(overlay_input_test input_policy_test.cpp)
 add_test(NAME input_policy COMMAND overlay_input_test)
 add_executable(overlay_renderer_test renderer_test.cpp document_renderer.cpp)

@@ -77,7 +77,8 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         auto name=std::filesystem::path(image).filename().wstring();
         bool allowed=_wcsicmp(name.c_str(),L"amazing.exe")==0 || _wcsicmp(name.c_str(),L"gta_sa.exe")==0;
 #ifdef AMAZING_HELPER_TEST_HOST
-        allowed=_wcsicmp(name.c_str(),L"overlay_native_smoke.exe")==0;
+        allowed=_wcsicmp(name.c_str(),L"overlay_native_smoke.exe")==0 ||
+                _wcsicmp(name.c_str(),L"overlay_native_smoke_dep_off.exe")==0;
 #endif
         if(!allowed || _wcsicmp(image.c_str(),args[6].c_str()) || Created(target.h)!=std::string(args[4].begin(),args[4].end()) || WaitForSingleObject(target.h,0)!=WAIT_TIMEOUT)throw std::runtime_error("Игровой процесс изменился");
         BOOL wow=FALSE;
@@ -106,10 +107,16 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         auto status=process.Attach(pid,PROCESS_QUERY_INFORMATION|PROCESS_VM_READ|PROCESS_VM_WRITE|PROCESS_VM_OPERATION|PROCESS_CREATE_THREAD|PROCESS_DUP_HANDLE|SYNCHRONIZE);
         if(!NT_SUCCESS(status))throw std::runtime_error("Windows или защита игры отклонила доступ к процессу");
         stage="mapping";
+        // Preserve the PE section protections even for legacy DEP-off targets.
+        // Blackbone's default useDep casting strips PAGE_EXECUTE there, making
+        // MinHook reject our own detour. This does not change the target's DEP
+        // policy or the protection of any existing game/third-party code.
+        process.memory().protectionCasting(blackbone::MemProtectionCasting::none);
         // Map the verified in-memory bytes, avoiding a file replacement race.
         auto result=process.mmap().MapImage(bytes.size(),bytes.data(),false,blackbone::NoFlags);
         if(!result)throw std::runtime_error("Manual Map завершился ошибкой. Перезапустите игру. NTSTATUS="+std::to_string(static_cast<unsigned long>(result.status)));
-        return Output({{"ok",true},{"stage","mapped"},{"version",AMAZING_HELPER_VERSION}},0);
+        return Output({{"ok",true},{"stage","mapped"},{"version",AMAZING_HELPER_VERSION},
+                       {"dep_enabled",process.core().DEP()}},0);
     } catch(const std::exception& error) {
         return Output({{"ok",false},{"stage",stage},{"error",error.what()}},1);
     }

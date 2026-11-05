@@ -682,8 +682,20 @@ class LauncherWindow(QMainWindow):
                 self.manager_layout.setContentsMargins(margin, 28, margin, 16)
 
     def closeEvent(self, event):
+        from .launcher_lifecycle import log
+        log.info("window close spontaneous=%s", event.spontaneous())
         self.closed = True
         self.timer.stop()
         if self.manager is not None:
             self.manager.close()
         super().closeEvent(event)
+
+    def nativeEvent(self, event_type, message):
+        from .launcher_lifecycle import native_message
+        native_message(message)
+        return super().nativeEvent(event_type, message)
+
+    def hideEvent(self, event):
+        from .launcher_lifecycle import log
+        log.info("window hidden minimized=%s", self.isMinimized())
+        super().hideEvent(event)

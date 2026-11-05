@@ -40,6 +40,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
+#ifdef AMAZING_HOST_DEP_OFF
+    DWORD depFlags = 0;
+    BOOL permanent = FALSE;
+    if (!GetProcessDEPPolicy(GetCurrentProcess(), &depFlags, &permanent) || (depFlags & PROCESS_DEP_ENABLE)) {
+        // Do not silently claim DEP-off coverage on a machine forcing DEP on.
+        return 22;
+    }
+#endif
     const bool selfTest = command && wcsstr(command, L"--self-test");
     const auto designOption=command?wcsstr(command,L"--design="):nullptr;
     WNDCLASSW klass{}; klass.lpfnWndProc = WindowProc; klass.hInstance = instance; klass.lpszClassName = L"OverlaySmoke";

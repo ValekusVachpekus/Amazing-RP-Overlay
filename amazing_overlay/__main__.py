@@ -35,6 +35,8 @@ def main():
         if not server.listen():
             backend.close()
             return 1
+        # Complete in-flight RPC work before destroying its Qt signals or store.
+        app.aboutToQuit.connect(lambda: server.pool.waitForDone())
         app.aboutToQuit.connect(backend.close)
     else:
         from PySide6.QtWidgets import QApplication
@@ -51,6 +53,8 @@ def main():
         from .ui import OverlayWindow, BrowserInstaller, STYLE
         app.setStyleSheet(STYLE)
         if desktop:
+            from .launcher_lifecycle import start
+            start(app)
             from .launcher import LauncherWindow
             from .manager_navigation import ManagerNavigation
             window = LauncherWindow()
@@ -63,7 +67,11 @@ def main():
             window.client_control = ClientControl(window, args.mode)
         if args.mode != "overlay":
             window.show()
-    return app.exec()
+    result = app.exec()
+    if args.mode in ("launcher", "manager"):
+        from .launcher_lifecycle import log
+        log.info("Qt event loop returned code=%s", result)
+    return result
 
 
 if __name__ == "__main__":

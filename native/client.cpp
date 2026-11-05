@@ -996,7 +996,8 @@ DWORD WINAPI Bootstrap(void*) {
     GetModuleFileNameW(nullptr, image, 32768);
     const wchar_t* base = wcsrchr(image, L'\\');
     if (GetEnvironmentVariableW(L"AMAZING_OVERLAY_NATIVE_SELFTEST", testFlag, 8) &&
-        !_wcsicmp(base ? base + 1 : image, L"overlay_native_smoke.exe")) {
+        (!_wcsicmp(base ? base + 1 : image, L"overlay_native_smoke.exe") ||
+         !_wcsicmp(base ? base + 1 : image, L"overlay_native_smoke_dep_off.exe"))) {
         std::thread probe([] {
             static thread_local std::string local = "manual-map-tls";
             try { throw std::runtime_error(local); }
