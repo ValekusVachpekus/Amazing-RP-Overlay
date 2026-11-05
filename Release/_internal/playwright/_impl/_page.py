@@ -35,7 +35,6 @@ from typing import (
 )
 
 from playwright._impl._api_structures import (
-    AriaRole,
     FilePayload,
     FloatRect,
     PdfMargins,
@@ -85,6 +84,7 @@ from playwright._impl._helper import (
     url_matches,
 )
 from playwright._impl._input import Keyboard, Mouse, Touchscreen
+from playwright._impl._internal_structures import AriaRole
 from playwright._impl._js_handle import (
     JSHandle,
     Serializable,
@@ -101,9 +101,11 @@ from playwright._impl._network import (
     serialize_headers,
 )
 from playwright._impl._screencast import Screencast
+from playwright._impl._signature import signature
 from playwright._impl._video import Video
 from playwright._impl._waiter import Waiter
 from playwright._impl._web_storage import WebStorage
+from playwright._impl._webmcp import WebMCP
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright._impl._browser_context import BrowserContext
@@ -125,7 +127,7 @@ class LocatorHandler:
         self.times = times
 
     def __call__(self) -> Any:
-        arg_count = len(inspect.signature(self._handler).parameters)
+        arg_count = len(signature(self._handler).parameters)
         if arg_count == 0:
             return self._handler()
         return self._handler(self.locator)
@@ -541,8 +543,8 @@ class Page(ChannelOwner):
     def url(self) -> str:
         return self._main_frame.url
 
-    async def content(self) -> str:
-        return await self._main_frame.content()
+    async def content(self, includeShadow: bool = None) -> str:
+        return await self._main_frame.content(includeShadow=includeShadow)
 
     async def set_content(
         self,
@@ -960,6 +962,9 @@ class Page(ChannelOwner):
     ) -> "Locator":
         return self._main_frame.get_by_placeholder(text, exact=exact)
 
+    def get_by_ref(self, ref: str) -> "Locator":
+        return self.locator(f"aria-ref={ref}")
+
     def get_by_role(
         self,
         role: AriaRole,
@@ -1204,6 +1209,12 @@ class Page(ChannelOwner):
         params = locals_to_params(locals())
         if "path" in params:
             del params["path"]
+        for key in ["width", "height"]:
+            if key in params:
+                params[key] = to_pdf_size(params[key])
+        for key in ["top", "right", "bottom", "left"]:
+            if key in params.get("margin", {}):
+                params["margin"][key] = to_pdf_size(params["margin"][key])
         encoded_binary = await self._channel.send("pdf", None, params)
         decoded_binary = base64.b64decode(encoded_binary)
         if path:
@@ -1222,6 +1233,10 @@ class Page(ChannelOwner):
     @property
     def screencast(self) -> Screencast:
         return self._screencast
+
+    @property
+    def webmcp(self) -> WebMCP:
+        return self._main_frame.webmcp
 
     @property
     def local_storage(self) -> WebStorage:
@@ -1637,3 +1652,10 @@ def trim_end(s: str) -> str:
     if len(s) > 50:
         return s[:50] + "\u2026"
     return s
+
+
+def to_pdf_size(value: Any) -> Any:
+    # Unlabeled numbers are pixels, as in the JS client. bool is not a number here.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value}px"
+    return value

@@ -16,11 +16,11 @@ from amazing_overlay.transport import rpc
 def main():
     app = QCoreApplication([])
     paths = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
-    executable = Path(paths[0]).resolve() if paths else ROOT / ".cache/dist" / "AmazingLawOverlay" / "AmazingLawOverlay.exe"
+    executable = Path(paths[0]).resolve() if paths else ROOT / ".cache/dist" / "AmazingHelper" / "AmazingHelper.exe"
     with tempfile.TemporaryDirectory() as directory:
         env = {key: value for key, value in os.environ.items() if not key.startswith("AI_")}
         env.update(AMAZING_OVERLAY_DATA=directory, QT_QPA_PLATFORM="offscreen")
-        process = subprocess.Popen([str(executable), "backend"], cwd=executable.parent, env=env)
+        process = subprocess.Popen([str(executable), "backend", "--no-legacy-import"], cwd=executable.parent, env=env)
         try:
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -39,6 +39,7 @@ def main():
                 assert (executable.parent / '_internal/amazing_overlay/assets' / asset).is_file(), f"Missing desktop asset: {asset}"
             assert health["documents"] == 0, "Release must not contain local laws"
             assert not rpc("settings")["has_api_key"], "Release must not contain a local credential"
+            rpc("settings_save", {"notes_dir": str(Path(directory) / "Notes")})
             assert "ai_api_key" not in rpc("settings")
             rpc("state_set", {"key": "portable-test", "value": "работает"})
             assert rpc("state_get", {"key": "portable-test"}) == "работает"
@@ -111,6 +112,12 @@ def main():
                         assert forwarded.returncode == 0, "Settings navigation must reuse the running manager"
                         assert client.poll() is None, "The original manager must remain open"
                         print("PORTABLE MANAGER NAVIGATION: PASS")
+                    if mode == "overlay":
+                        from amazing_overlay.client_control import request_close
+                        request_close("overlay")
+                        client.wait(timeout=15)
+                        assert client.returncode == 0, "Overlay must close cooperatively before an update"
+                        print("PORTABLE CLIENT UPDATE HANDSHAKE: PASS")
                 finally:
                     if client.poll() is None:
                         client.terminate()

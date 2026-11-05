@@ -15,9 +15,9 @@
 import base64
 from typing import Dict, List, Optional, cast
 
-from playwright._impl._api_structures import HeadersArray
 from playwright._impl._connection import ChannelOwner, StackFrame
 from playwright._impl._helper import HarLookupResult, locals_to_params
+from playwright._impl._internal_structures import HeadersArray
 
 
 class LocalUtils(ChannelOwner):
@@ -71,7 +71,7 @@ class LocalUtils(ChannelOwner):
     async def trace_discarded(self, stacks_id: str) -> None:
         return await self._channel.send("traceDiscarded", None, {"stacksId": stacks_id})
 
-    def add_stack_to_tracing_no_reply(self, id: int, frames: List[StackFrame]) -> None:
+    def add_stack_to_tracing_no_reply(self, id: str, frames: List[StackFrame]) -> None:
         self._channel.send_no_reply(
             "addStackToTracingNoReply",
             None,

@@ -8,6 +8,7 @@ import uuid
 
 from PySide6.QtCore import QCoreApplication, QObject, QProcess, QRunnable, QThreadPool, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from shiboken6 import isValid
 
 from .settings import PIPE_NAME, ROOT
 
@@ -151,8 +152,10 @@ class RpcServer(QObject):
             socket.disconnected.connect(lambda s=socket: self.drop(s))
 
     def drop(self, socket):
-        self.buffers.pop(socket, None)
-        socket.deleteLater()
+        if socket in self.buffers:
+            self.buffers.pop(socket, None)
+            if isValid(socket):
+                socket.deleteLater()
 
     def read(self, socket):
         data = self.buffers.get(socket)

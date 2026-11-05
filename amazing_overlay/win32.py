@@ -105,7 +105,7 @@ def belongs_to_game(hwnd):
     try:
         length = wintypes.DWORD(32768)
         buffer = ctypes.create_unicode_buffer(length.value)
-        return bool(kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(length)) and buffer.value.lower().endswith("\\amazing.exe"))
+        return bool(kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(length)) and buffer.value.lower().endswith(("\\amazing.exe", "\\gta_sa.exe")))
     finally:
         kernel.CloseHandle(handle)
 

@@ -18,7 +18,6 @@ import json
 import json as json_utils
 import mimetypes
 import re
-from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import (
@@ -29,6 +28,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Pattern,
     Sequence,
     TypedDict,
     Union,
@@ -38,8 +38,6 @@ from urllib import parse
 
 from playwright._impl._api_structures import (
     ClientCertificate,
-    Headers,
-    HeadersArray,
     HttpCredentials,
     RemoteAddr,
     RequestSizes,
@@ -61,6 +59,7 @@ from playwright._impl._helper import (
     locals_to_params,
     url_matches,
 )
+from playwright._impl._internal_structures import Headers, HeadersArray
 from playwright._impl._str_utils import escape_regex_flags
 from playwright._impl._waiter import Waiter
 
@@ -140,6 +139,30 @@ def to_http_credentials_protocol(
         cast(HttpCredentials, {k: v for k, v in c.items() if v is not None})
         for c in credentials_list
     ] or None
+
+
+def to_clear_cookies_params(
+    name: Optional[Union[str, Pattern[str]]],
+    domain: Optional[Union[str, Pattern[str]]],
+    path: Optional[Union[str, Pattern[str]]],
+) -> Dict[str, Optional[str]]:
+    return {
+        "name": name if isinstance(name, str) else None,
+        "nameRegexSource": name.pattern if isinstance(name, Pattern) else None,
+        "nameRegexFlags": (
+            escape_regex_flags(name) if isinstance(name, Pattern) else None
+        ),
+        "domain": domain if isinstance(domain, str) else None,
+        "domainRegexSource": (domain.pattern if isinstance(domain, Pattern) else None),
+        "domainRegexFlags": (
+            escape_regex_flags(domain) if isinstance(domain, Pattern) else None
+        ),
+        "path": path if isinstance(path, str) else None,
+        "pathRegexSource": path.pattern if isinstance(path, Pattern) else None,
+        "pathRegexFlags": (
+            escape_regex_flags(path) if isinstance(path, Pattern) else None
+        ),
+    }
 
 
 class Request(ChannelOwner):
@@ -238,7 +261,7 @@ class Request(ChannelOwner):
             return None
         content_type = self.headers.get("content-type")
         if content_type and "application/x-www-form-urlencoded" in content_type:
-            return dict(parse.parse_qsl(post_data))
+            return dict(parse.parse_qsl(post_data, keep_blank_values=True))
         try:
             return json.loads(post_data)
         except Exception:
@@ -462,7 +485,8 @@ class Route(ChannelOwner):
         headers = {k.lower(): str(v) for k, v in params.get("headers", {}).items()}
         if params.get("contentType"):
             headers["content-type"] = params["contentType"]
-        elif json:
+        elif json or isinstance(json, (list, tuple, dict)):
+            # Like the JS client, which checks truthiness: [] and {} are truthy in JS.
             headers["content-type"] = "application/json"
         elif path:
             headers["content-type"] = (
@@ -1005,9 +1029,10 @@ class WebSocket(ChannelOwner):
 class RawHeaders:
     def __init__(self, headers: HeadersArray) -> None:
         self._headers_array = headers
-        self._headers_map: Dict[str, Dict[str, bool]] = defaultdict(dict)
+        self._headers_map: Dict[str, Dict[str, bool]] = {}
         for header in headers:
-            self._headers_map[header["name"].lower()][header["value"]] = True
+            values = self._headers_map.setdefault(header["name"].lower(), {})
+            values[header["value"]] = True
 
     @staticmethod
     def _from_headers_dict_lossy(headers: Dict[str, str]) -> "RawHeaders":
@@ -1021,7 +1046,7 @@ class RawHeaders:
         return separator.join(values)
 
     def get_all(self, name: str) -> List[str]:
-        return list(self._headers_map[name.lower()].keys())
+        return list(self._headers_map.get(name.lower(), {}).keys())
 
     def headers(self) -> Dict[str, str]:
         result = {}

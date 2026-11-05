@@ -1,32 +1,22 @@
-param([string]$BundlePath = '.cache/dist/AmazingLawOverlay')
+param(
+    [string]$BundlePath = '.cache/dist/portable-build/AmazingHelper',
+    [Parameter(Mandatory=$true)][string]$NativeDirectory
+)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$bundleDirectory = Join-Path $projectRoot $BundlePath
-if (-not (Test-Path -LiteralPath (Join-Path $bundleDirectory 'AmazingLawOverlay.exe'))) {
-    throw 'Build the executable first.'
+$bundleDirectory = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $BundlePath))
+if (-not (Test-Path -LiteralPath (Join-Path $bundleDirectory 'AmazingHelper.exe'))) { throw 'Build AmazingHelper.exe first.' }
+$nativeRoot = (Resolve-Path -LiteralPath $NativeDirectory).Path
+foreach ($artifactName in @('AmazingLawClient.dll', 'AmazingLawClient.asi', 'AmazingHelperInjector.exe')) {
+    $artifactPath = Join-Path $nativeRoot $artifactName
+    if (-not (Test-Path -LiteralPath $artifactPath)) { throw "Missing native artifact: $artifactPath" }
+    Copy-Item -LiteralPath $artifactPath -Destination $bundleDirectory
 }
-Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/V2.md') -Destination (Join-Path $bundleDirectory 'README.md')
-# No local config, .env, laws or browser profiles are copied into a release.
-foreach ($clientMode in @('manager', 'overlay', 'backend', 'install-browser')) {
-    $batchText = "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" AmazingLawOverlay.exe $clientMode`r`n"
-    [System.IO.File]::WriteAllText((Join-Path $bundleDirectory "start_$clientMode.bat"), $batchText)
+# Compatibility commands only; the user launches the EXE or an installed shortcut.
+foreach ($mode in @('launcher','manager','overlay','backend','install-browser')) {
+    $name = if ($mode -eq 'launcher') { 'start.bat' } else { "start_$mode.bat" }
+    $content = "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" AmazingHelper.exe $mode`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $bundleDirectory $name), $content)
 }
-$launcherBatch = "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" AmazingLawOverlay.exe launcher`r`n"
-[System.IO.File]::WriteAllText((Join-Path $bundleDirectory 'start.bat'), $launcherBatch)
-$nativeCandidates = @(
-    (Join-Path $projectRoot '.cache/dist/native-latest/AmazingLawClient.dll'),
-    (Join-Path $projectRoot 'native/out/Release/AmazingLawClient.dll'),
-    (Join-Path $projectRoot 'native/out-local/AmazingLawClient.dll')
-) | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-Item -LiteralPath $_ }
-$newestNative = $nativeCandidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$nativeDirectory = if ($newestNative) { $newestNative.DirectoryName } else { '' }
-if (-not $nativeDirectory) { throw 'Build the native client before packaging the complete release.' }
-foreach ($artifactName in @('AmazingLawClient.dll', 'AmazingLawClient.asi')) {
-    $artifactPath = Join-Path $nativeDirectory $artifactName
-    if (Test-Path -LiteralPath $artifactPath) {
-        Copy-Item -LiteralPath $artifactPath -Destination $bundleDirectory
-    } else {
-        throw "Missing native artifact: $artifactPath"
-    }
-}
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/RELEASE.md') -Destination (Join-Path $bundleDirectory 'README.md')
 Write-Output "Portable package: $bundleDirectory"

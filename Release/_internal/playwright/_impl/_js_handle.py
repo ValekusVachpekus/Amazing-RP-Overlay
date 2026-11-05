@@ -16,15 +16,17 @@ import base64
 import collections.abc
 import datetime
 import math
+import re
 import struct
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Pattern, Union
 from urllib.parse import ParseResult, urlparse, urlunparse
 
 from playwright._impl._connection import Channel, ChannelOwner, from_channel
 from playwright._impl._errors import Error, is_target_closed_error
 from playwright._impl._map import Map
+from playwright._impl._str_utils import escape_regex_flags, parse_regex_flags
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright._impl._element_handle import ElementHandle
@@ -145,7 +147,7 @@ def serialize_value(
             return dict(v="Infinity")
         if value == float("-inf"):
             return dict(v="-Infinity")
-        if value == float("-0"):
+        if value == 0 and math.copysign(1.0, value) == -1.0:
             return dict(v="-0")
         if math.isnan(value):
             return dict(v="NaN")
@@ -182,6 +184,10 @@ def serialize_value(
         return {"s": value}
     if isinstance(value, ParseResult):
         return {"u": urlunparse(value)}
+    if isinstance(value, Pattern):
+        if not isinstance(value.pattern, str):
+            raise Error("Only str patterns are supported.")
+        return {"r": {"p": value.pattern, "f": escape_regex_flags(value)}}
 
     if value in visitor_info.visited:
         return dict(ref=visitor_info.visited[value])
@@ -246,6 +252,13 @@ def parse_value(value: Any, refs: Optional[Dict[int, Any]] = None) -> Any:
             error._name = value["e"]["n"]
             error._stack = value["e"]["s"]
             return error
+
+        if "r" in value:
+            try:
+                return re.compile(value["r"]["p"], parse_regex_flags(value["r"]["f"]))
+            except re.error:
+                # JavaScript-only syntax, e.g. /(?<name>x)/, has no re equivalent.
+                return value
 
         if "a" in value:
             a: List = []

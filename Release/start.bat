@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-start "" AmazingLawOverlay.exe launcher
+start "" AmazingHelper.exe launcher

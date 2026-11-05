@@ -29,9 +29,8 @@ from typing import (
     cast,
 )
 
-import greenlet
-
 from playwright._impl._connection import _capture_stack_trace
+from playwright._impl._greenlets import connection_closed_error, wait_for_future
 from playwright._impl._helper import Error
 from playwright._impl._impl_to_api_mapping import ImplToApiMapping, ImplWrapper
 
@@ -46,14 +45,12 @@ class EventInfo(Generic[T]):
     def __init__(self, sync_base: "SyncBase", future: "asyncio.Future[T]") -> None:
         self._sync_base = sync_base
         self._future = future
-        g_self = greenlet.getcurrent()
-        self._future.add_done_callback(lambda _: g_self.switch())
 
     @property
     def value(self) -> T:
-        while not self._future.done():
-            self._sync_base._dispatcher_fiber.switch()
-        asyncio._set_running_loop(self._sync_base._loop)
+        wait_for_future(
+            self._sync_base._loop, self._sync_base._dispatcher_fiber, self._future
+        )
         exception = self._future.exception()
         if exception:
             raise exception
@@ -102,21 +99,18 @@ class SyncBase(ImplWrapper):
         if self._loop.is_closed():
             coro.close()
             raise Error("Event loop is closed! Is Playwright already stopped?")
+        if self._dispatcher_fiber.dead:
+            coro.close()
+            raise connection_closed_error()
 
-        g_self = greenlet.getcurrent()
         task: asyncio.tasks.Task[Any] = self._loop.create_task(coro)
         setattr(task, "__pw_stack__", _capture_stack_trace())
         setattr(task, "__pw_stack_trace__", traceback.extract_stack(limit=10))
 
-        task.add_done_callback(lambda _: g_self.switch())
-        while not task.done():
-            self._dispatcher_fiber.switch()
-        asyncio._set_running_loop(self._loop)
+        wait_for_future(self._loop, self._dispatcher_fiber, task)
         return task.result()
 
-    def _wrap_handler(
-        self, handler: Union[Callable[..., Any], Any]
-    ) -> Callable[..., None]:
+    def _wrap_handler(self, handler: Union[Callable[..., Any], Any]) -> Any:
         if callable(handler):
             return mapping.wrap_handler(handler)
         return handler

@@ -40,6 +40,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
+#ifdef AMAZING_HOST_DEP_OFF
+    DWORD depFlags = 0;
+    BOOL permanent = FALSE;
+    if (!GetProcessDEPPolicy(GetCurrentProcess(), &depFlags, &permanent) || (depFlags & PROCESS_DEP_ENABLE)) {
+        // Do not silently claim DEP-off coverage on a machine forcing DEP on.
+        return 22;
+    }
+#endif
     const bool selfTest = command && wcsstr(command, L"--self-test");
     const auto designOption=command?wcsstr(command,L"--design="):nullptr;
     WNDCLASSW klass{}; klass.lpfnWndProc = WindowProc; klass.hInstance = instance; klass.lpszClassName = L"OverlaySmoke";
@@ -52,6 +60,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     IDirect3DDevice9* device = nullptr;
     const auto created=d3d->CreateDevice(0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, &device);
     if (FAILED(created)) {std::fprintf(stderr,"D3D9 test host cannot create a device (HRESULT 0x%08lX).\n",static_cast<unsigned long>(created));return 2;}
+    const bool manualHost = command && wcsstr(command, L"--manual-map-host");
+    if (manualHost) {
+        ShowWindow(window, SW_HIDE);
+        MSG message{};
+        ULONGLONG started = GetTickCount64();
+        while (GetTickCount64() - started < 90000 && message.message != WM_QUIT) {
+            if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+            device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(15,23,42), 1, 0);
+            if (SUCCEEDED(device->BeginScene())) device->EndScene();
+            device->Present(nullptr, nullptr, nullptr, nullptr);
+            Sleep(10);
+        }
+        device->Release(); d3d->Release(); return 0;
+    }
     HMODULE library = LoadLibraryW(L"AmazingLawClient.dll");
     if (!library) return 3;
     using Probe = unsigned(__cdecl*)();

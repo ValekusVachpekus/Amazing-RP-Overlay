@@ -14,10 +14,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from law_overlay import OverlayWindow, load_config, load_laws
+import law_overlay as legacy
 
 
 def smoke_test(window: OverlayWindow) -> bool:
@@ -78,6 +81,15 @@ def main() -> int:
 
     if args.smoke:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        # Never depend on (or rewrite) the developer's ignored local laws/config.
+        temporary = tempfile.TemporaryDirectory(prefix="amazing-legacy-smoke-")
+        legacy.BASE_DIR = Path(temporary.name)
+        legacy.LAWS_DIR = legacy.BASE_DIR / "laws"
+        legacy.LAWS_DIR.mkdir()
+        legacy.INDEX_FILE = legacy.LAWS_DIR / "index.csv"
+        legacy.CONFIG_FILE = legacy.BASE_DIR / "config.json"
+        legacy.ENV_FILE = legacy.BASE_DIR / ".env"
+        (legacy.LAWS_DIR / "fixture__Synthetic.txt").write_text("Синтетический документ\n" + "Строка для проверки прокрутки.\n" * 200, encoding="utf-8")
 
     app = QApplication(sys.argv)
     config = load_config()

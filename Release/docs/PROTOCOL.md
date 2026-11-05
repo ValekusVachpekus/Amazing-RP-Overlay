@@ -23,6 +23,8 @@ There is no arbitrary Python execution endpoint.
 | --- | --- | --- |
 | health | — | version, app_version, documents, data_dir, browsers_dir, import_warnings, shutdown, stopping |
 | shutdown | — | stopping:true; cancel jobs, finish in-flight RPC/file writes and exit normally |
+| native_register | pid, created (FILETIME decimal string), version, stage (initializing/ready/error), error | true; heartbeat of native client, expires after 15 seconds |
+| native_status | pid, created | live native state or null; advertised by health.native_sessions |
 | documents | — | document metadata array |
 | document | id | document tree and sanitized HTML |
 | search | query, optional doc_ids, limit | ranked section hits including snippet/post_id/heading |

@@ -1352,6 +1352,7 @@ class OverlayWindow(RemoteWindow):
         self.save_state()
         self.cancel_jobs()
         self.hotkeys.clear()
+        QApplication.instance().removeEventFilter(self)
         self.tray.hide()
         self.closed = True
         QApplication.quit()

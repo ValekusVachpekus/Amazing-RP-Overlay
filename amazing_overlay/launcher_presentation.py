@@ -87,6 +87,7 @@ QToolTip {background:#23232f;border:1px solid #7751a3;color:#f3f1f7;padding:6px;
 """.replace("@ASSETS@", (Path(__file__).parent / "assets").as_posix().replace('"', '\\"'))
 
 PATHS = {
+    "up": '<path d="M10 17V3M4 9l6-6 6 6"/>',
     "home": '<path d="M4 10l6-5 6 5v7H4z"/>',
     "database": '<rect x="4" y="4" width="12" height="13" rx="1"/><path d="M6 7h8M6 10h8M6 13h8"/>',
     "overlay": '<rect x="4" y="4" width="12" height="12"/><rect x="8" y="8" width="4" height="4"/>',

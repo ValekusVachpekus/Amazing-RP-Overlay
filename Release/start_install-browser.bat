@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-start "" AmazingLawOverlay.exe install-browser
+start "" AmazingHelper.exe install-browser

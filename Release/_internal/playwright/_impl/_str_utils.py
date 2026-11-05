@@ -16,6 +16,8 @@ import json
 import re
 from typing import Pattern, Union
 
+from playwright._impl._errors import Error
+
 
 def escape_regex_flags(pattern: Pattern) -> str:
     flags = ""
@@ -27,12 +29,27 @@ def escape_regex_flags(pattern: Pattern) -> str:
         flags += "s"
     if (pattern.flags & int(re.MULTILINE)) != 0:
         flags += "m"
-    assert (
+    if (
         pattern.flags
         & ~(int(re.MULTILINE) | int(re.IGNORECASE) | int(re.DOTALL) | int(re.UNICODE))
-        == 0
-    ), "Unexpected re.Pattern flag, only MULTILINE, IGNORECASE and DOTALL are supported."
+        != 0
+    ):
+        raise Error(
+            "Unexpected re.Pattern flag, only MULTILINE, IGNORECASE and DOTALL are supported."
+        )
     return flags
+
+
+def parse_regex_flags(flags: str) -> int:
+    result = 0
+    if "i" in flags:
+        result |= re.IGNORECASE
+    if "s" in flags:
+        result |= re.DOTALL
+    if "m" in flags:
+        result |= re.MULTILINE
+    # The remaining JavaScript flags (d, g, u, v, y) have no re equivalent.
+    return result
 
 
 def escape_for_regex(text: str) -> str:
